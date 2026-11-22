@@ -3,7 +3,8 @@ import { COMPANIES, BRAND_ORDER, DEFAULT_PROFILES } from './companies.js';
 import { groupFigures, breakdown, GROUP } from './finance.js';
 import { db, keepDataSafe } from './db.js';
 import { esc, inr, icon, toast } from './ui.js';
-import { hasPin, runLock } from './lock.js';
+import { hasPin, runLock, setThemeColor } from './security/lock.js';
+import { renderSecurity, getAutoLockMs } from './security/privacy.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
 import { renderSettings, renderProfile, renderRateForm, renderGroup } from './settings.js';
 import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.js';
@@ -13,7 +14,7 @@ import { invoiceState, money, fmtDate, addDays } from './docs.js';
 import { status as backupStatus, isDue as backupIsDue, backupToDrive, startAutoBackup, autoBackup, warmUp, explain as backupError } from './backup.js';
 
 const STORE_KEY = 'aurdesk.company';
-const AUTO_LOCK_MS = 60 * 1000;
+let autoLockMs = 60 * 1000; // set in Privacy & Security (Immediately, 30 s, 1 min, 5 min)
 const view = document.getElementById('view');
 const tabbar = document.querySelector('.tabbar');
 const switcher = document.getElementById('switcher');
@@ -70,6 +71,7 @@ const ctx = {
   setTab: (tab) => setTab(tab),
   switchCompany(id) { state.company = id; localStorage.setItem(STORE_KEY, id); applyTheme(); },
   lockNow: () => lock(),
+  async setAutoLock() { autoLockMs = await getAutoLockMs(); },
 };
 
 /* ---------- theme ---------- */
@@ -255,7 +257,7 @@ async function render() {
   const screens = {
     'client-form': renderClientForm, client: renderClient,
     profile: renderProfile, rate: renderRateForm,
-    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc, 'money-co': renderMoneyCompany, group: renderGroup,
+    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc, 'money-co': renderMoneyCompany, group: renderGroup, security: renderSecurity,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
   else if (state.tab === 'home') {
@@ -331,7 +333,7 @@ switcher.addEventListener('click', (e) => {
 });
 
 /* ---------- lock ----------
-   The app asks for the PIN when it is opened fresh, or after 1 minute in the background.
+   The app asks for the password when it is opened fresh, or after the auto-lock time in the background.
    A refresh (or pull-to-refresh) within that minute keeps you unlocked: the "unlocked"
    flag lives in sessionStorage, which survives a reload but is cleared when the app is closed. */
 const SESSION_KEY = 'aurdesk.unlocked';
@@ -340,7 +342,7 @@ const markActive = () => sessionStorage.setItem(ACTIVE_KEY, String(Date.now()));
 
 function stillUnlocked() {
   const last = Number(sessionStorage.getItem(ACTIVE_KEY) || 0);
-  return sessionStorage.getItem(SESSION_KEY) === '1' && Date.now() - last < AUTO_LOCK_MS;
+  return sessionStorage.getItem(SESSION_KEY) === '1' && autoLockMs > 0 && Date.now() - last < autoLockMs;
 }
 
 let locking = false;
@@ -352,6 +354,7 @@ async function lock() {
   await runLock((await hasPin()) ? 'unlock' : 'setup');
   sessionStorage.setItem(SESSION_KEY, '1');
   markActive();
+  setThemeColor('#F6F7FB');
   locking = false;
   await load();
   render();
@@ -359,15 +362,37 @@ async function lock() {
   warmUp();
 }
 
+/* ---------- launch: navy screen with the gold mark, on fresh opens only ---------- */
+function finishLaunch(play) {
+  const el = document.getElementById('launch');
+  if (!el) return Promise.resolve();
+  if (!play) { el.remove(); return Promise.resolve(); }
+  return new Promise((resolve) => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => {
+      el.classList.add('out');
+      setTimeout(() => { el.remove(); }, 350);
+      resolve();
+    }, reduced ? 200 : 850);
+  });
+}
+
 async function start() {
+  autoLockMs = await getAutoLockMs();
+  const fresh = !sessionStorage.getItem('aurdesk.launched');
+  sessionStorage.setItem('aurdesk.launched', '1');
   if ((await hasPin()) && stillUnlocked()) {
+    finishLaunch(false);
+    setThemeColor('#F6F7FB');
     markActive();
     await load();
     render();
     startAutoBackup();
     warmUp();
   } else {
-    lock();
+    const shown = finishLaunch(fresh);
+    lock();       // the lock screen is navy too, so the launch flows straight into it
+    await shown;
   }
 }
 

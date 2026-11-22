@@ -2,7 +2,6 @@
 import { db } from './db.js';
 import { COMPANIES } from './companies.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox, priceLine, BILLING } from './ui.js';
-import { runLock, bioAvailable, bioEnabled, enableBio, disableBio } from './lock.js';
 import {
   status as backupStatus, setPassword, setPrefs, connect, disconnect, backupToDrive, FREQS, explain,
   listDriveBackups, downloadDriveBackup, decryptFile, restorePayload, summary, encryptedFileForPhone, warmUp,
@@ -16,7 +15,6 @@ export async function renderSettings(ctx, view) {
   const rates = ctx.cache.rates.filter((r) => r.company === ctx.state.company)
     .sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15) || a.name.localeCompare(b.name));
   const groups = groupBy(rates, 'group');
-  const [bioOk, bioOn] = [await bioAvailable(), await bioEnabled()];
   const bk = await backupStatus();
   const missing = [!p.upi && 'UPI ID', !p.email && 'email'].filter(Boolean);
 
@@ -59,17 +57,12 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Security</h2></div>
-      <div class="card settings-list">
-        <button class="set-row" data-change-pin>${icon('lock')}<span>Change PIN</span>${icon('right', 'row-arrow')}</button>
-        ${bioOk ? `
-        <label class="set-row">
-          ${icon('finger')}<span>Unlock with fingerprint</span>
-          <input type="checkbox" class="switch" id="bio-toggle" ${bioOn ? 'checked' : ''}>
-        </label>` : `<div class="set-row muted">${icon('finger')}<span>Fingerprint needs a screen lock on this phone</span></div>`}
-        <button class="set-row" data-lock-now>${icon('lock')}<span>Lock now</span>${icon('right', 'row-arrow')}</button>
-      </div>
-      <p class="hint">The app locks itself when it has been in the background for 1 minute.</p>
+      <div class="section-head"><h2>Privacy &amp; Security</h2></div>
+      <button class="list-row" data-go="security">
+        <span class="row-icon" aria-hidden="true">${icon('shield')}</span>
+        <span class="list-main"><strong>Privacy &amp; Security</strong><small>App lock, fingerprint, auto-lock, backup password</small></span>
+        ${icon('right', 'row-arrow')}
+      </button>
     </section>
 
     <section class="section" id="backup-section">
@@ -86,7 +79,7 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <button class="btn btn-ghost btn-block" data-update>Check for updates</button>
-    <p class="version">AUR Desk · step 7 · data stays on this phone</p>
+    <p class="version">AUR Desk · step 8 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
@@ -95,11 +88,6 @@ export async function renderSettings(ctx, view) {
   view.querySelector('#import-rates').onchange = (e) => importRates(ctx, e.target);
   bindBackup(ctx, view, bk);
 
-  view.querySelector('[data-change-pin]').onclick = async () => {
-    await runLock('setup', { cancellable: true });
-    ctx.render();
-  };
-  view.querySelector('[data-lock-now]').onclick = () => ctx.lockNow();
   view.querySelector('[data-update]').onclick = async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true; btn.textContent = 'Checking…';
@@ -110,15 +98,6 @@ export async function renderSettings(ctx, view) {
       setTimeout(() => location.reload(), 600);
     } catch { toast('Could not check. Are you online?'); btn.disabled = false; btn.textContent = 'Check for updates'; }
   };
-  const bio = view.querySelector('#bio-toggle');
-  if (bio) {
-    bio.onchange = async () => {
-      if (bio.checked) {
-        try { await enableBio(); toast('Fingerprint unlock is on'); }
-        catch { bio.checked = false; toast('Fingerprint was not set up'); }
-      } else { await disableBio(); toast('Fingerprint unlock is off'); }
-    };
-  }
   const owner = view.querySelector('#owner-name');
   owner.onchange = async () => {
     const v = owner.value.trim() || 'Shashank';
@@ -360,7 +339,6 @@ function backupCard(bk) {
         <div class="more-body">
           <button class="btn btn-ghost btn-block" data-phone-copy>${icon('backup')}Save an encrypted copy to this phone</button>
           ${restoreFileButton()}
-          <button class="btn btn-ghost btn-block" data-set-password>Change backup password</button>
           <button class="btn btn-ghost btn-block" data-client-id>Change Google Client ID</button>
           <button class="btn btn-danger-ghost btn-block" data-disconnect>Disconnect Google Drive</button>
         </div>
@@ -377,17 +355,7 @@ function bindBackup(ctx, view, bk) {
   };
   warmUp();
 
-  on('[data-set-password]', async () => {
-    const pw = await passwordDialog({
-      title: bk.hasPassword ? 'Change backup password' : 'Set a backup password',
-      text: 'At least 8 characters. Write it down somewhere safe: without it, your backups cannot be opened, not even by me. Backups made before a change still need the old password.',
-      confirm: true,
-    });
-    if (!pw) return;
-    await setPassword(pw);
-    toast('Backup password saved');
-    ctx.render();
-  });
+  on('[data-set-password]', async () => { if (await changeBackupPassword(bk.hasPassword)) ctx.render(); });
 
   on('[data-client-id]', async () => {
     const id = await textDialog({
@@ -482,6 +450,19 @@ async function restoreFlow(ctx, file) {
   await restorePayload(data);
   await ctx.reload();
   toast('Backup restored');
+}
+
+// used here (backup setup) and in Privacy & Security
+export async function changeBackupPassword(hasPassword) {
+  const pw = await passwordDialog({
+    title: hasPassword ? 'Change backup password' : 'Set a backup password',
+    text: 'At least 8 characters. Write it down somewhere safe: without it, your backups cannot be opened, not even by me. Backups made before a change still need the old password.',
+    confirm: true,
+  });
+  if (!pw) return false;
+  await setPassword(pw);
+  toast('Backup password saved');
+  return true;
 }
 
 /* ---------- small dialogs ---------- */

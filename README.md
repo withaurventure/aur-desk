@@ -23,6 +23,10 @@ No app store, no build tools.
 - Group structure: AUR Ventures is the parent (shared costs, funding, projects, group GSTIN) and is
   not a profit centre; AUR Studio and AUR Printing Studio are the brands. Home shows the group's net
   profit or loss with a drop-down line per company. Rules live in `js/finance.js`
+- Premium launch (navy + gold, short animation on fresh opens), compact lock screen with three
+  password types (numbers 4–8, letters 6–8, letters + numbers 6–8, case-sensitive) plus
+  fingerprint, and a Settings → Privacy & Security page (lock, fingerprint, auto-lock timing,
+  backup password). All privacy and security code lives in `js/security/`
 - Backup to Google Drive: encrypted on the phone with your backup password (AES-256-GCM), uploaded
   to an "AUR Desk Backups" folder (app can only see its own files), newest 10 kept, one-tap or
   automatic (after every change, hourly, daily, every 2 days, weekly, monthly), restore from Drive
@@ -53,8 +57,8 @@ Upload the changed files to the same repository, and change `VERSION` in `sw.js`
 - `index.html`: the page
 - `css/app.css`: all styling
 - `js/companies.js`: the three companies, colours, number prefixes, starting contact details, onboarding checklists
-- `js/app.js`: lock, navigation and the Home screen
-- `js/lock.js`: PIN and fingerprint lock
+- `js/app.js`: launch, navigation and the Home screen
+- `js/security/`: Privacy & Security folder: `lock.js` (app lock, password types, fingerprint) and `privacy.js` (the Privacy & Security page). Future privacy and security features go here.
 - `js/db.js`: on-phone storage
 - `js/clients.js`: client list, onboarding form and client page
 - `js/settings.js`: company details, rate card, security, backup

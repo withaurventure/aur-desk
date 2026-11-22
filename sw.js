@@ -1,6 +1,6 @@
 // AUR Desk — service worker: lets the app open with no internet.
 // Bump VERSION whenever you upload new files. Updates show on the next open (or right away while open).
-const VERSION = 'aur-desk-v11';
+const VERSION = 'aur-desk-v12';
 const FILES = [
   './',
   'index.html',
@@ -9,7 +9,8 @@ const FILES = [
   'js/companies.js',
   'js/db.js',
   'js/ui.js',
-  'js/lock.js',
+  'js/security/lock.js',
+  'js/security/privacy.js',
   'js/clients.js',
   'js/settings.js',
   'js/docs.js',
