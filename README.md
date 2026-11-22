@@ -20,6 +20,9 @@ No app store, no build tools.
   month's Money entries, printing size calculator; price check and printing turn into a quotation in one tap
 - Money tab shows all three companies together: total in / out / net for the month, one line per
   company, and a detail view per company (money in by source, expenses by type, all entries)
+- Group structure: AUR Ventures is the parent (shared costs, funding, projects, group GSTIN) and is
+  not a profit centre; AUR Studio and AUR Printing Studio are the brands. Home shows the group's net
+  profit or loss with a drop-down line per company. Rules live in `js/finance.js`
 - Backup to Google Drive: encrypted on the phone with your backup password (AES-256-GCM), uploaded
   to an "AUR Desk Backups" folder (app can only see its own files), newest 10 kept, one-tap or
   automatic (after every change, hourly, daily, every 2 days, weekly, monthly), restore from Drive
@@ -61,6 +64,7 @@ Upload the changed files to the same repository, and change `VERSION` in `sw.js`
 - `js/pdf.js`: PDF layout (quotations, invoices, receipts, UPI QR) and sharing
 - `js/money.js`: Money tab and the money in / out form
 - `js/calc.js`: Calculator (price check, profit, printing size)
+- `js/finance.js`: group profit rules (brands, shared costs, funding, internal transfers)
 - `js/backup.js`: encrypted backups, Google Drive upload/restore and auto-backup
 - `vendor/qrcode.js`: QR code generator (MIT licence, see `vendor/qrcode-LICENSE.txt`)
 - `vendor/jspdf.umd.min.js`: PDF engine (jsPDF, MIT licence, see `vendor/jspdf-LICENSE.txt`)

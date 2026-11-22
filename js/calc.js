@@ -2,6 +2,7 @@
 import { db } from './db.js';
 import { esc, uid, icon, pageHeader, toast, MARKETS } from './ui.js';
 import { money, totals, currencyFor, MARKET_PRICE_KEY, today } from './docs.js';
+import { groupFigures } from './finance.js';
 
 const PLAN_DEFAULTS = { target: 100000, expenses: 30000, reserve: 15, hours: 120, clients: 5 };
 const SIZES = [[2, 3], [3, 4], [3, 6], [4, 6], [5, 8], [6, 10], [8, 12], [10, 20]];
@@ -164,9 +165,11 @@ function priceCheck(ctx, body, plan) {
 /* =================== 2. Profit =================== */
 function profit(ctx, body, plan) {
   const month = today().slice(0, 7);
-  const txns = ctx.cache.txns.filter((t) => (t.currency || 'INR') === 'INR' && t.date.startsWith(month) && (mem.scope === 'all' || t.company === ctx.state.company));
-  const inSum = txns.filter((t) => t.type === 'in').reduce((s, t) => s + n(t.amount), 0);
-  const outSum = txns.filter((t) => t.type === 'out').reduce((s, t) => s + n(t.amount), 0);
+  // same rules as Home and Money: brand profits minus AUR Ventures' shared costs
+  const g = groupFigures(ctx.cache.txns, month);
+  const brand = g.brands.find((b) => b.id === ctx.state.company);
+  const inSum = mem.scope === 'all' ? g.income : (brand ? brand.income : 0);
+  const outSum = mem.scope === 'all' ? g.costs : (brand ? brand.costs : 0);
 
   body.innerHTML = `
     <div class="calc">
@@ -183,7 +186,7 @@ function profit(ctx, body, plan) {
 
       <h2 class="form-section">This month so far</h2>
       <div class="seg" role="radiogroup" aria-label="Which companies">
-        <input type="radio" name="pscope" id="ps-all" value="all" ${mem.scope === 'all' ? 'checked' : ''}><label for="ps-all">All companies</label>
+        <input type="radio" name="pscope" id="ps-all" value="all" ${mem.scope === 'all' ? 'checked' : ''}><label for="ps-all">Whole group</label>
         <input type="radio" name="pscope" id="ps-one" value="one" ${mem.scope === 'one' ? 'checked' : ''}><label for="ps-one">${esc(ctx.company().short)} only</label>
       </div>
       <section class="calc-result" id="pf-actual" aria-live="polite"></section>

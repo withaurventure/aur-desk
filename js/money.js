@@ -4,6 +4,7 @@ import { db } from './db.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox } from './ui.js';
 import { money, fmtDate, today, invoiceState, syncInvoice, nextNumber } from './docs.js';
 import { COMPANIES, COMPANY_ORDER } from './companies.js';
+import { groupFigures, breakdown, GROUP, TRANSFER_OUT, PROJECTS, FUNDING, isInternal, isFunding } from './finance.js';
 
 export const METHODS = ['UPI', 'Bank transfer (NEFT/IMPS/RTGS)', 'Cash', 'Card', 'Cheque', 'PayPal', 'Wise', 'Other'];
 export const OUT_CATEGORIES = [
@@ -39,12 +40,12 @@ function bindMonth(view, redraw) {
     redraw();
   }));
 }
-function sumCard(t) {
+function sumCard(t, netLabel = 'Net') {
   return `
     <section class="money-sum">
       <div><small>In</small><strong class="in">${esc(money(t.in))}</strong></div>
       <div><small>Out</small><strong class="out">${esc(money(t.out))}</strong></div>
-      <div><small>Net</small><strong>${esc(signed(t.in - t.out))}</strong></div>
+      <div><small>${netLabel}</small><strong>${esc(signed(t.in - t.out))}</strong></div>
       ${t.inUsd || t.outUsd ? `<p class="usd-line">Dollars: in ${esc(money(t.inUsd, 'USD'))} · out ${esc(money(t.outUsd, 'USD'))}</p>` : ''}
     </section>`;
 }
@@ -65,38 +66,41 @@ function entryList(list, showCompany, emptyText) {
     : `<div class="empty">${emptyText}</div>`}`;
 }
 
-/* =================== Money tab: all three companies together =================== */
+/* =================== Money tab: the whole group together =================== */
 export function renderMoney(ctx, view) {
   const inMonth = ctx.cache.txns.filter((t) => t.date.startsWith(month));
-  const overall = totalsOf(inMonth);
-  const per = COMPANY_ORDER.map((id) => ({ id, co: COMPANIES[id], ...totalsOf(inMonth.filter((t) => t.company === id)) }));
+  const g = groupFigures(ctx.cache.txns, month);
+  const rows = [
+    ...g.brands.map((b) => ({
+      id: b.id, co: b.co, name: b.co.name, net: b.net,
+      sub: b.income || b.costs ? `In ${money(b.income)} · Out ${money(b.costs)}` : 'Nothing this month',
+    })),
+    {
+      id: GROUP, co: g.ventures.co, name: 'AUR Ventures · shared costs', net: g.ventures.net,
+      sub: `Costs ${money(g.ventures.sharedCosts)}${g.ventures.funding ? ` · funding in ${money(g.ventures.funding)}` : ''}`,
+    },
+  ];
 
   view.innerHTML = `
     <div class="title-row">
       <h1 class="page-title">Money</h1>
-      <span class="muted">All companies</span>
+      <span class="muted">AUR Group</span>
     </div>
     ${monthRow()}
-    ${sumCard(overall)}
+    ${sumCard({ in: g.income, out: g.costs, inUsd: g.usdIn, outUsd: g.usdOut }, g.net < 0 ? 'Net loss' : 'Net profit')}
 
     <section class="section">
       <div class="section-head"><h2>By company</h2><span class="muted">tap for details</span></div>
       <div class="card co-list">
-        ${per.map((c) => {
-          const net = c.in - c.out;
-          const empty = !c.in && !c.out && !c.inUsd && !c.outUsd;
-          return `
-          <button class="co-row" data-co="${c.id}" style="--co:${c.co.theme.dot}">
+        ${rows.map((r) => `
+          <button class="co-row" data-co="${r.id}" style="--co:${r.co.theme.dot}">
             <span class="co-dot" aria-hidden="true"></span>
-            <span class="list-main">
-              <strong>${esc(c.co.name)}</strong>
-              <small>${empty ? 'Nothing this month' : `In ${esc(money(c.in))} · Out ${esc(money(c.out))}${c.inUsd || c.outUsd ? ` · $ in ${esc(money(c.inUsd, 'USD'))}` : ''}`}</small>
-            </span>
-            <span class="co-net ${net < 0 ? 'neg' : net > 0 ? 'pos' : ''}"><small>Net</small>${esc(signed(net))}</span>
+            <span class="list-main"><strong>${esc(r.name)}</strong><small>${esc(r.sub)}</small></span>
+            <span class="co-net ${r.net < 0 ? 'neg' : r.net > 0 ? 'pos' : ''}"><small>${r.id === GROUP ? 'Cost' : 'Net'}</small>${esc(signed(r.net))}</span>
             ${icon('right', 'row-arrow')}
-          </button>`;
-        }).join('')}
+          </button>`).join('')}
       </div>
+      <p class="hint">Group profit = brand profits − AUR Ventures' shared costs. Money into Ventures is funding and moves to Ventures are internal, so neither counts as profit or cost.</p>
     </section>
 
     <div class="row-2">
@@ -115,59 +119,87 @@ export function renderMoney(ctx, view) {
 }
 
 /* =================== one company in detail =================== */
+let project = 'all';
 export function renderMoneyCompany(ctx, view) {
   const id = ctx.state.id;
   const co = COMPANIES[id];
   if (!co) { view.innerHTML = `${pageHeader('Money')}<div class="empty">Unknown company.</div>`; return; }
+  const isGroup = id === GROUP;
   const inMonth = ctx.cache.txns.filter((t) => t.company === id && t.date.startsWith(month));
-  const t = totalsOf(inMonth);
-
-  // where the money came from and where it went (rupees)
-  const group = (type, keyOf) => Object.entries(inMonth
-    .filter((x) => x.type === type && (x.currency || 'INR') === 'INR')
-    .reduce((acc, x) => { const k = keyOf(x) || 'Not set'; acc[k] = (acc[k] || 0) + n(x.amount); return acc; }, {}))
-    .sort((a, b) => b[1] - a[1]);
-  const sources = group('in', (x) => x.party);
-  const costs = group('out', (x) => x.category);
+  const g = groupFigures(ctx.cache.txns, month);
+  const bd = breakdown(ctx.cache.txns, id, month);
   const bars = (rows, total, cls) => rows.map(([k, v]) => `
     <div class="bar-row">
       <span class="bar-label"><span>${esc(k)}</span><strong>${esc(money(v))}</strong></span>
       <span class="bar-track"><span class="bar-fill ${cls}" style="width:${total ? Math.max(3, Math.round(v / total * 100)) : 0}%"></span></span>
     </div>`).join('');
+  const entries = isGroup && project !== 'all' ? inMonth.filter((t) => t.type === 'out' && (t.project || 'General') === project) : inMonth;
+
+  let body;
+  if (isGroup) {
+    const v = g.ventures;
+    body = `
+      <section class="money-sum">
+        <div><small>Shared costs</small><strong class="out">${esc(money(v.sharedCosts))}</strong></div>
+        <div><small>Funding in</small><strong class="in">${esc(money(v.funding))}</strong></div>
+        <div><small>Effect on profit</small><strong>${esc(signed(v.net))}</strong></div>
+      </section>
+      <p class="hint">AUR Ventures runs both brands. It isn't a profit centre: its costs come off the group's profit, and money put into it is funding.</p>
+      <section class="section">
+        <div class="section-head"><h2>Costs by project</h2><span class="muted">${esc(money(v.sharedCosts))}</span></div>
+        ${bd.byProject.length ? `<div class="card bars">${bars(bd.byProject, v.sharedCosts, 'out')}</div>` : '<div class="empty">No shared costs this month.</div>'}
+      </section>
+      <section class="section">
+        <div class="section-head"><h2>Costs by type</h2></div>
+        ${bd.out.length ? `<div class="card bars">${bars(bd.out, v.sharedCosts, 'out')}</div>` : '<div class="empty">Nothing yet.</div>'}
+      </section>
+      <section class="section">
+        <div class="section-head"><h2>Funding in</h2><span class="muted">${esc(money(v.funding))}</span></div>
+        ${bd.in.length ? `<div class="card bars">${bars(bd.in, v.funding, 'in')}</div>` : '<div class="empty">No funding this month.</div>'}
+      </section>`;
+  } else {
+    const b = g.brands.find((x) => x.id === id);
+    body = `
+      ${sumCard({ in: b.income, out: b.costs, inUsd: 0, outUsd: 0 }, b.net < 0 ? 'Net loss' : 'Net profit')}
+      <section class="section">
+        <div class="section-head"><h2>Money in by source</h2><span class="muted">${esc(money(b.income))}</span></div>
+        ${bd.in.length ? `<div class="card bars">${bars(bd.in, b.income, 'in')}</div>` : '<div class="empty">No money in this month.</div>'}
+      </section>
+      <section class="section">
+        <div class="section-head"><h2>Expenses by type</h2><span class="muted">${esc(money(b.costs))}</span></div>
+        ${bd.out.length ? `<div class="card bars">${bars(bd.out, b.costs, 'out')}</div>` : '<div class="empty">No expenses this month.</div>'}
+        ${b.transfers ? `<p class="hint">Also moved to AUR Ventures: ${esc(money(b.transfers))}. That's internal, so it isn't counted as an expense.</p>` : ''}
+      </section>`;
+  }
 
   view.innerHTML = `
-    ${pageHeader(co.name, 'Money in & out')}
+    ${pageHeader(isGroup ? 'AUR Ventures' : co.name, isGroup ? 'Parent company · shared costs' : 'Money in & out')}
     ${monthRow()}
-    ${sumCard(t)}
-
-    <section class="section">
-      <div class="section-head"><h2>Money in by source</h2><span class="muted">${esc(money(t.in))}</span></div>
-      ${sources.length ? `<div class="card bars">${bars(sources, t.in, 'in')}</div>` : '<div class="empty">No money in this month.</div>'}
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Expenses by type</h2><span class="muted">${esc(money(t.out))}</span></div>
-      ${costs.length ? `<div class="card bars">${bars(costs, t.out, 'out')}</div>` : '<div class="empty">No expenses this month.</div>'}
-    </section>
-
+    ${body}
     <div class="row-2">
-      <button class="btn btn-primary" data-add="in">${icon('plus')}Money in</button>
-      <button class="btn btn-ghost" data-add="out">${icon('minus')}Money out</button>
+      <button class="btn ${isGroup ? 'btn-ghost' : 'btn-primary'}" data-add="in">${icon('plus')}${isGroup ? 'Funding in' : 'Money in'}</button>
+      <button class="btn ${isGroup ? 'btn-primary' : 'btn-ghost'}" data-add="out">${icon('minus')}${isGroup ? 'Shared cost' : 'Money out'}</button>
     </div>
-
     <h2 class="form-section">All entries</h2>
-    ${entryList(inMonth, false, `Nothing recorded for ${esc(co.name)} in this month.`)}
+    ${isGroup ? `
+      <div class="field">
+        <label for="proj-filter">Project</label>
+        <select id="proj-filter"><option value="all">All projects</option>${PROJECTS.map((p) => `<option ${p === project ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>
+      </div>` : ''}
+    ${entryList(entries, false, `Nothing recorded for ${esc(isGroup ? 'AUR Ventures' : co.name)} in this month.`)}
   `;
 
   bindMonth(view, () => renderMoneyCompany(ctx, view));
   view.querySelectorAll('input[name=mfilter]').forEach((r) => (r.onchange = () => { filter = r.value; renderMoneyCompany(ctx, view); }));
+  const pf = view.querySelector('#proj-filter');
+  if (pf) pf.onchange = () => { project = pf.value; renderMoneyCompany(ctx, view); };
   view.querySelectorAll('[data-add]').forEach((b) => (b.onclick = () => { ctx.state.preset = { type: b.dataset.add, company: id }; ctx.go('txn'); }));
   view.querySelectorAll('[data-back]').forEach((b) => (b.onclick = () => ctx.back()));
   bindTxnRows(ctx, view);
 }
 
 export function txnRow(t, showCompany = false) {
-  const sub = [t.type === 'in' ? 'into ' + (t.account || '-') : 'from ' + (t.account || '-'), t.method, t.invoiceNumber, t.type === 'out' ? t.category : '']
+  const sub = [isFunding(t) ? 'Funding: ' + (t.category || 'other') : '', isInternal(t) ? 'Internal move' : '', t.type === 'in' ? 'into ' + (t.account || '-') : 'from ' + (t.account || '-'), t.method, t.invoiceNumber, t.type === 'out' && !isInternal(t) ? (t.project ? t.project + ' · ' : '') + (t.category || '') : '']
     .filter(Boolean).join(' · ');
   return `
     <button class="list-row" data-txn="${t.id}">
@@ -215,11 +247,19 @@ export function renderTxnForm(ctx, view) {
         </div>
       </fieldset>`}
       <div class="seg seg-money" role="radiogroup" aria-label="Type">
-        <input type="radio" name="type" id="ty-in" value="in" ${t.type === 'in' ? 'checked' : ''}><label for="ty-in">Money in</label>
-        <input type="radio" name="type" id="ty-out" value="out" ${t.type === 'out' ? 'checked' : ''}><label for="ty-out">Money out</label>
+        <input type="radio" name="type" id="ty-in" value="in" ${t.type === 'in' ? 'checked' : ''}><label for="ty-in">${company === GROUP ? 'Funding in' : 'Money in'}</label>
+        <input type="radio" name="type" id="ty-out" value="out" ${t.type === 'out' ? 'checked' : ''}><label for="ty-out">${company === GROUP ? 'Shared cost' : 'Money out'}</label>
       </div>
 
+      ${company === GROUP ? `
       <div class="field in-only">
+        <label for="t-funding">Funding type</label>
+        <select id="t-funding" name="funding">
+          ${FUNDING.map((f) => `<option ${f === t.category ? 'selected' : ''}>${esc(f)}</option>`).join('')}
+        </select>
+        <small class="hint">Money put into AUR Ventures is funding. It isn't counted as profit.</small>
+      </div>` : ''}
+      <div class="field in-only ${company === GROUP ? 'hide-group' : ''}">
         <label for="t-invoice">For invoice</label>
         <select id="t-invoice" name="invoiceId">
           <option value="">Not for an invoice</option>
@@ -262,12 +302,21 @@ export function renderTxnForm(ctx, view) {
         <select id="t-method" name="method">${METHODS.map((m) => `<option ${m === t.method ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
       </div>
 
+      ${company === GROUP ? `
+      <div class="field out-only">
+        <label for="t-project">Project</label>
+        <select id="t-project" name="project">
+          ${PROJECTS.map((p) => `<option ${p === (t.project || 'General') ? 'selected' : ''}>${esc(p)}</option>`).join('')}
+        </select>
+        <small class="hint">Shared costs are tracked by project, so you can see what the scheduling tool has cost so far.</small>
+      </div>` : ''}
       <div class="field out-only">
         <label for="t-category">What for</label>
         <select id="t-category" name="category">
           <option value="">Choose…</option>
-          ${OUT_CATEGORIES.map((c) => `<option ${c === t.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+          ${[...OUT_CATEGORIES, ...(company === GROUP ? [] : [TRANSFER_OUT])].map((c) => `<option ${c === t.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}
         </select>
+        ${company === GROUP ? '' : `<small class="hint">Choose "${TRANSFER_OUT}" when you move money to the parent company. It won't count as an expense.</small>`}
       </div>
 
       <div class="field">
@@ -326,7 +375,7 @@ export function renderTxnForm(ctx, view) {
     if (!(amount > 0)) { err.textContent = 'Enter an amount above zero.'; view.querySelector('#t-amount').focus(); return; }
     if (!val('date')) { err.textContent = 'Choose a date.'; return; }
     const type = val('type');
-    const invoiceId = type === 'in' ? val('invoiceId') : '';
+    const invoiceId = type === 'in' && company !== GROUP ? val('invoiceId') : '';
     const inv = invoiceId ? cache.docs.find((d) => d.id === invoiceId) : null;
     if (inv && inv.currency !== val('currency')) { err.textContent = `This invoice is in ${inv.currency === 'USD' ? 'dollars' : 'rupees'}. Switch the currency to match.`; return; }
 
@@ -337,7 +386,8 @@ export function renderTxnForm(ctx, view) {
       type, amount, currency: val('currency'), date: val('date'),
       party: val('party'), account: val('account'), method: val('method'),
       reference: val('reference'), note: val('note'),
-      category: type === 'out' ? val('category') : '',
+      category: type === 'out' ? val('category') : (company === GROUP ? val('funding') : ''),
+      project: type === 'out' && company === GROUP ? val('project') : null,
       invoiceId: invoiceId || null, invoiceNumber: inv ? inv.number : null,
       createdAt: existing ? existing.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),

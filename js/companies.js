@@ -66,6 +66,8 @@ export const COMPANIES = {
 };
 
 export const COMPANY_ORDER = ['studio', 'printing', 'ventures'];
+// Brands do client work (clients, quotations, invoices, rate cards). AUR Ventures is the parent.
+export const BRAND_ORDER = ['studio', 'printing'];
 
 // Starting contact details. Everything here can be changed in Settings;
 // your changes are saved on the phone and override these.
@@ -77,6 +79,7 @@ export const DEFAULT_PROFILES = {
     displayName: 'AUR Ventures', email: 'withaurventure@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '',
     ...DOC_DEFAULTS,
     terms: "Either side can end the engagement with 30 days' written notice.",
+    brandLine: true, // print "AUR Studio is a brand of AUR Ventures" on documents
   },
   studio: {
     displayName: 'AUR Studio', email: 'withaurstudio@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '',

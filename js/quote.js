@@ -34,6 +34,12 @@ export function renderDocuments(ctx, view) {
         ? `No quotations yet for ${esc(ctx.company().name)}.<br>Tap <strong>New quotation</strong> to make one.`
         : 'No invoices yet. Approve a quotation to turn it into an invoice.'}</div>`}
   `;
+  const older = ctx.cache.docs.filter((d) => d.company === 'ventures' && d.kind === docTab);
+  if (older.length) {
+    view.insertAdjacentHTML('beforeend', `
+      <section class="section"><div class="section-head"><h2>AUR Ventures (older)</h2><span class="muted">made before Ventures became the parent</span></div>
+      <div class="list">${older.map(docRow).join('')}</div></section>`);
+  }
   view.querySelector('[data-new]').onclick = () => { ctx.state.preset = null; ctx.go('doc-edit'); };
   view.querySelectorAll('input[name=doctab]').forEach((r) => (r.onchange = () => { docTab = r.value; renderDocuments(ctx, view); }));
   bindDocRows(ctx, view);

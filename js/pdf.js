@@ -84,13 +84,14 @@ async function drawHeader(k, profile, title, rightLines) {
   pdf.setDrawColor(227, 230, 238); pdf.setLineWidth(0.3); pdf.line(L, 42, R, 42);
 }
 
-function drawFooter(k) {
+function drawFooter(k, profile = {}) {
   const { pdf, co, font, SLATE, W, R } = k;
   const pages = pdf.getNumberOfPages();
   for (let i = 1; i <= pages; i++) {
     pdf.setPage(i);
     font('regular', 7.5, SLATE);
-    if (co.tagline) pdf.text(co.tagline, W / 2, 287, { align: 'center' });
+    if (co.tagline) pdf.text(co.tagline, W / 2, profile.brandOf ? 283 : 287, { align: 'center' });
+    if (profile.brandOf) pdf.text(profile.brandOf, W / 2, 287.5, { align: 'center' });
     if (pages > 1) pdf.text(`${i} / ${pages}`, R, 287, { align: 'right' });
   }
 }
@@ -249,7 +250,7 @@ export async function buildPdf(doc, profile, pay = null) {
     });
   }
 
-  drawFooter(k);
+  drawFooter(k, profile);
   return new File([pdf.output('blob')], fileNameFor(doc.number, c.name), { type: 'application/pdf' });
 }
 
@@ -297,7 +298,7 @@ export async function buildReceipt(txn, inv, profile, state) {
   font('regular', 8.5, SLATE);
   pdf.text('This receipt confirms the payment above was received by ' + profile.displayName + '.', L, y);
 
-  drawFooter(k);
+  drawFooter(k, profile);
   return new File([pdf.output('blob')], fileNameFor(txn.receiptNo, txn.party), { type: 'application/pdf' });
 }
 

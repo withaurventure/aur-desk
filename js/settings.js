@@ -33,6 +33,15 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <section class="section">
+      <div class="section-head"><h2>Group</h2></div>
+      <button class="list-row" data-go="group">
+        <img class="row-logo" src="logos/aur-ventures.jpg" alt="">
+        <span class="list-main"><strong>AUR Ventures · parent company</strong><small>Legal details and GSTIN for both brands</small></span>
+        ${icon('right', 'row-arrow')}
+      </button>
+    </section>
+
+    <section class="section">
       <div class="section-head"><h2>Rate card</h2><span class="muted">${rates.length} ${rates.length === 1 ? 'item' : 'items'}</span></div>
       ${rates.length ? Object.entries(groups).map(([g, items]) => `
         <div class="card rate-group">
@@ -77,7 +86,7 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <button class="btn btn-ghost btn-block" data-update>Check for updates</button>
-    <p class="version">AUR Desk · step 6.2 · data stays on this phone</p>
+    <p class="version">AUR Desk · step 7 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
@@ -175,7 +184,7 @@ export function renderProfile(ctx, view) {
       </div>
 
       <h2 class="form-section">Tax</h2>
-      ${field('gstin', 'GSTIN', p.gstin, 'text', 'Leave empty until you register. Documents will then show no GST.', 'autocapitalize="characters"')}
+      ${field('gstin', 'GSTIN for this brand only', (ctx.cache.profiles[ctx.state.company] || {}).gstin || '', 'text', 'Usually leave empty: both brands use the GSTIN in Settings → Group (AUR Ventures) once you register.', 'autocapitalize="characters"')}
 
       <button class="btn btn-primary btn-block" type="submit">Save details</button>
     </form>`;
@@ -555,4 +564,40 @@ function pickBackup(files) {
     dlg.oncancel = () => resolve(null);
     dlg.showModal();
   });
+}
+
+/* =================== Group: AUR Ventures, the parent =================== */
+export function renderGroup(ctx, view) {
+  const g = ctx.profile('ventures');
+  view.innerHTML = `
+    ${pageHeader('AUR Ventures', 'Parent company of AUR Studio and AUR Printing Studio')}
+    <form class="form" id="group-form">
+      <p class="hint">AUR Ventures runs both brands and carries the shared costs (tools, registration, hiring, the scheduling tool). It doesn't make quotations or invoices itself.</p>
+      <div class="field"><label for="g-name">Company name</label><input id="g-name" name="displayName" value="${esc(g.displayName)}"></div>
+      <div class="field"><label for="g-email">Email</label><input id="g-email" name="email" type="email" inputmode="email" value="${esc(g.email)}"></div>
+      <div class="field"><label for="g-wa">WhatsApp</label><input id="g-wa" name="whatsapp" type="tel" inputmode="tel" value="${esc(g.whatsapp)}"></div>
+      <div class="field"><label for="g-addr">Registered address</label><textarea id="g-addr" name="address" rows="2">${esc(g.address)}</textarea></div>
+      <div class="field">
+        <label for="g-gstin">GSTIN</label>
+        <input id="g-gstin" name="gstin" value="${esc(g.gstin)}" autocapitalize="characters" placeholder="Add after registration">
+        <small class="hint">Printed on AUR Studio and AUR Printing Studio documents, and turns on the "Add GST" switch for both.</small>
+      </div>
+      <label class="set-row card">
+        <span><strong class="opt-title">"A brand of AUR Ventures" on documents</strong><small class="opt-sub">Adds e.g. "AUR Studio is a brand of AUR Ventures" in small print at the bottom of PDFs</small></span>
+        <input type="checkbox" class="switch" name="brandLine" ${g.brandLine ? 'checked' : ''}>
+      </label>
+      <button class="btn btn-primary btn-block" type="submit">Save</button>
+    </form>`;
+  view.querySelector('#group-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const prev = ctx.cache.profiles.ventures || {};
+    const next = { ...prev };
+    for (const k of ['displayName', 'email', 'whatsapp', 'address', 'gstin']) next[k] = String(f.get(k) || '').trim();
+    next.brandLine = f.get('brandLine') === 'on';
+    await db.setKV('profiles', { ...(ctx.cache.profiles || {}), ventures: next });
+    await ctx.reload(false);
+    toast('Group details saved');
+    ctx.back();
+  };
 }

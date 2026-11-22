@@ -1,10 +1,11 @@
 // AUR Desk — app shell: lock, navigation, Home screen.
-import { COMPANIES, COMPANY_ORDER, DEFAULT_PROFILES } from './companies.js';
+import { COMPANIES, BRAND_ORDER, DEFAULT_PROFILES } from './companies.js';
+import { groupFigures, breakdown, GROUP } from './finance.js';
 import { db, keepDataSafe } from './db.js';
 import { esc, inr, icon, toast } from './ui.js';
 import { hasPin, runLock } from './lock.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
-import { renderSettings, renderProfile, renderRateForm } from './settings.js';
+import { renderSettings, renderProfile, renderRateForm, renderGroup } from './settings.js';
 import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.js';
 import { renderMoney, renderMoneyCompany, renderTxnForm } from './money.js';
 import { renderCalc } from './calc.js';
@@ -18,7 +19,8 @@ const tabbar = document.querySelector('.tabbar');
 const switcher = document.getElementById('switcher');
 
 const state = {
-  company: localStorage.getItem(STORE_KEY) in COMPANIES ? localStorage.getItem(STORE_KEY) : 'studio',
+  // only the brands can be selected; AUR Ventures is the parent (see Settings → Group)
+  company: BRAND_ORDER.includes(localStorage.getItem(STORE_KEY)) ? localStorage.getItem(STORE_KEY) : 'studio',
   tab: 'home',
   sub: null,   // a screen opened on top of a tab (form, detail)
   id: null,
@@ -42,7 +44,14 @@ async function load() {
 const ctx = {
   state, cache,
   company: () => COMPANIES[state.company],
-  profile: (id = state.company) => ({ ...DEFAULT_PROFILES[id], ...(cache.profiles[id] || {}) }),
+  profile: (id = state.company) => {
+    const p = { ...DEFAULT_PROFILES[id], ...(cache.profiles[id] || {}) };
+    if (id === GROUP) return p;
+    const g = { ...DEFAULT_PROFILES[GROUP], ...(cache.profiles[GROUP] || {}) };
+    if (!p.gstin && g.gstin) p.gstin = g.gstin;                 // one registration for both brands
+    p.brandOf = g.brandLine ? `${p.displayName || COMPANIES[id].name} is a brand of ${g.displayName || 'AUR Ventures'}` : '';
+    return p;
+  },
   go(sub, id = null) {
     if (state.sub === sub && state.id === id && sub !== 'doc-edit') return; // double tap: don't stack the same screen
     if (sub === 'doc-edit') resetEditor();
@@ -80,24 +89,68 @@ function greeting() {
   return h < 12 ? 'Good morning,' : h < 17 ? 'Good afternoon,' : 'Good evening,';
 }
 
+let openRow = null; // which company line is opened in the group card
+
+function groupCard() {
+  const thisMonth = new Date().toLocaleDateString('en-CA').slice(0, 7);
+  const monthName = new Date().toLocaleString('en-IN', { month: 'long' });
+  const g = groupFigures(cache.txns, thisMonth);
+  const signed = (v) => (v < 0 ? '−' : '+') + money(Math.abs(v));
+  const rows = [
+    ...g.brands.map((b) => ({ id: b.id, co: b.co, label: b.co.name, value: b.net })),
+    { id: GROUP, co: g.ventures.co, label: 'AUR Ventures · shared costs', value: g.ventures.net },
+  ];
+  const list = (items, total, empty) => items.length
+    ? items.slice(0, 4).map(([k, v]) => `<li><span>${esc(k)}</span><span>${esc(money(v))}</span></li>`).join('')
+      + (items.length > 4 ? `<li class="more-line"><span>+ ${items.length - 4} more</span><span></span></li>` : '')
+    : `<li class="none"><span>${empty}</span><span></span></li>`;
+  const detail = (id) => {
+    const bd = breakdown(cache.txns, id, thisMonth);
+    if (id === GROUP) {
+      return `
+        <div class="gc-part"><strong>Shared costs ${esc(money(g.ventures.sharedCosts))}</strong><ul>${list(bd.byProject, g.ventures.sharedCosts, 'No shared costs this month')}</ul></div>
+        ${g.ventures.funding ? `<div class="gc-part"><strong>Funding in ${esc(money(g.ventures.funding))}</strong><small>Not counted as profit</small><ul>${list(bd.in, g.ventures.funding, '')}</ul></div>` : ''}`;
+    }
+    const b = g.brands.find((x) => x.id === id);
+    return `
+      <div class="gc-part"><strong>In ${esc(money(b.income))}</strong><ul>${list(bd.in, b.income, 'Nothing in yet')}</ul></div>
+      <div class="gc-part"><strong>Out ${esc(money(b.costs))}</strong><ul>${list(bd.out, b.costs, 'No expenses yet')}</ul></div>
+      ${b.transfers ? `<p class="gc-note">Moved to AUR Ventures: ${esc(money(b.transfers))} (not a cost)</p>` : ''}`;
+  };
+  return `
+    <section class="hero group-card" aria-label="This month, all companies">
+      <span class="label">${esc(monthName)} · AUR Group</span>
+      <div class="gc-main">
+        <small>${g.net < 0 ? 'Net loss' : 'Net profit'}</small>
+        <strong class="${g.net < 0 ? 'neg' : ''}">${esc((g.net < 0 ? '−' : '') + money(Math.abs(g.net)))}</strong>
+        <span class="label">In ${esc(money(g.income))} · Out ${esc(money(g.costs))}${g.usdIn || g.usdOut ? ` · $ in ${esc(money(g.usdIn, 'USD'))}` : ''}</span>
+      </div>
+      <div class="gc-rows">
+        ${rows.map((r) => `
+          <div class="gc-item ${openRow === r.id ? 'open' : ''}">
+            <button class="gc-row" data-gc="${r.id}" aria-expanded="${openRow === r.id}" style="--co:${r.co.theme.dot}">
+              <span class="co-dot" aria-hidden="true"></span>
+              <span class="gc-name">${esc(r.label)}</span>
+              <span class="gc-val ${r.value < 0 ? 'neg' : r.value > 0 ? 'pos' : ''}">${esc(r.value ? signed(r.value) : money(0))}</span>
+              ${icon('chevron', 'gc-chev')}
+            </button>
+            ${openRow === r.id ? `<div class="gc-detail">${detail(r.id)}<button class="gc-see" data-see="${r.id}">See all entries ${icon('right')}</button></div>` : ''}
+          </div>`).join('')}
+      </div>
+    </section>`;
+}
+
 function renderHome() {
   const c = ctx.company();
-  const month = new Date().toLocaleString('en-IN', { month: 'long' });
-  const thisMonth = new Date().toLocaleDateString('en-CA').slice(0, 7);
-  const received = cache.txns
-    .filter((t) => t.company === state.company && t.type === 'in' && (t.currency || 'INR') === 'INR' && t.date.startsWith(thisMonth))
-    .reduce((s, t) => s + Number(t.amount || 0), 0);
+  const coTag = (id) => `<span class="co-tag" style="--co:${COMPANIES[id].theme.dot}">${esc(COMPANIES[id].short)}</span>`;
   const openInvoices = cache.docs
-    .filter((d) => d.company === state.company && d.kind === 'invoice')
+    .filter((d) => BRAND_ORDER.includes(d.company) && d.kind === 'invoice')
     .map((d) => ({ d, s: invoiceState(d, cache.txns) }))
     .filter((x) => x.s.balance > 0)
     .sort((a, b) => addDays(a.d.date, a.d.payment.balanceDays).localeCompare(addDays(b.d.date, b.d.payment.balanceDays)));
-  const due = openInvoices.filter((x) => x.d.currency === 'INR').reduce((s, x) => s + x.s.balance, 0);
-  const dueUsd = openInvoices.filter((x) => x.d.currency === 'USD').reduce((s, x) => s + x.s.balance, 0);
-  const pct = received + due ? Math.round((received / (received + due)) * 100) : 0;
-  const clients = cache.clients.filter((x) => x.company === state.company);
+  const dueInr = openInvoices.filter((x) => x.d.currency === 'INR').reduce((s, x) => s + x.s.balance, 0);
+  const clients = cache.clients.filter((x) => BRAND_ORDER.includes(x.company));
   const onboarding = clients.filter((x) => (x.checklist || []).some((i) => !i.done));
-  const openQuotes = cache.docs.filter((d) => d.company === state.company && d.kind === 'quote' && ['draft', 'sent', 'accepted'].includes(d.status)).length;
   const hasData = cache.clients.length || cache.rates.length || cache.docs.length || cache.txns.length;
   const bk = cache.backup || {};
   const p = ctx.profile();
@@ -105,22 +158,14 @@ function renderHome() {
   view.innerHTML = `
     <header class="topbar">
       <div class="brand"><img src="icons/icon-192.png" alt=""><span>AUR DESK</span></div>
-      <button class="company-pill" id="open-switcher" aria-label="Switch company, current: ${esc(c.name)}">
+      <button class="company-pill" id="open-switcher" aria-label="Working in ${esc(c.name)}. Tap to switch">
         <span class="dot"></span>${esc(c.short)}${icon('chevron')}
       </button>
     </header>
 
     <div class="greeting"><small>${greeting()}</small><h1>${esc(cache.owner)}</h1></div>
 
-    <section class="hero" aria-label="This month">
-      <span class="label">${esc(month)} · ${esc(c.name)}</span>
-      <div class="hero-grid">
-        <div><small>Received</small><strong>${inr(received)}</strong></div>
-        <div><small>Still due</small><strong>${inr(due)}</strong>${dueUsd ? `<small>+ ${esc(money(dueUsd, 'USD'))}</small>` : ''}</div>
-      </div>
-      <div class="track"><div style="width:${pct}%"></div></div>
-      <span class="label">${clients.length} ${clients.length === 1 ? 'client' : 'clients'} · ${openQuotes} open ${openQuotes === 1 ? 'quotation' : 'quotations'}</span>
-    </section>
+    ${groupCard()}
 
     ${!bk.ready && hasData ? `
       <button class="notice" data-goto-settings>
@@ -135,6 +180,7 @@ function renderHome() {
         ${icon('card')}<span><strong>Add how you get paid</strong><small>No UPI ID yet for ${esc(c.name)}. You can add it any time.</small></span>
       </button>` : ''}
 
+    <p class="work-in">New work goes to <strong>${esc(c.name)}</strong> · switch at the top</p>
     <div class="actions">
       <button class="action primary" data-new-quote>${icon('plus')}New quotation</button>
       <button class="action" data-onboard>${icon('client')}Onboard client</button>
@@ -143,11 +189,11 @@ function renderHome() {
     </div>
 
     <section class="section">
-      <div class="section-head"><h2>Payments due</h2></div>
-      ${openInvoices.length ? `<div class="list">${openInvoices.slice(0, 5).map(({ d, s }) => `
+      <div class="section-head"><h2>Payments due</h2>${dueInr ? `<span class="muted">${esc(money(dueInr))} still to come</span>` : ''}</div>
+      ${openInvoices.length ? `<div class="list">${openInvoices.slice(0, 6).map(({ d, s }) => `
         <button class="list-row" data-inv="${d.id}">
           <span class="list-main"><strong>${esc(d.client ? d.client.name : '')}</strong>
-            <small>${esc(d.number)} · ${s.advancePending ? 'advance due now' : 'due ' + esc(fmtDate(addDays(d.date, d.payment.balanceDays)))}</small></span>
+            <small>${coTag(d.company)}${esc(d.number)} · ${s.advancePending ? 'advance due now' : 'due ' + esc(fmtDate(addDays(d.date, d.payment.balanceDays)))}</small></span>
           <span class="doc-right"><strong>${esc(money(s.balance, d.currency))}</strong>
             <span class="status ${s.status === 'partial' ? 'st-warn' : 'st-bad'}">${s.status === 'partial' ? 'Part paid' : 'Unpaid'}</span></span>
         </button>`).join('')}</div>`
@@ -156,22 +202,29 @@ function renderHome() {
 
     <section class="section">
       <div class="section-head"><h2>Still onboarding</h2></div>
-      ${onboarding.length ? `<div class="list">${onboarding.slice(0, 4).map((x) => {
+      ${onboarding.length ? `<div class="list">${onboarding.slice(0, 5).map((x) => {
         const d = x.checklist.filter((i) => i.done).length;
         return `<button class="list-row" data-client="${x.id}">
-          <span class="list-main"><strong>${esc(x.name)}</strong><small>Next: ${esc((x.checklist.find((i) => !i.done) || {}).label || '')}</small></span>
+          <span class="list-main"><strong>${esc(x.name)}</strong><small>${coTag(x.company)}Next: ${esc((x.checklist.find((i) => !i.done) || {}).label || '')}</small></span>
           <span class="chip">${d}/${x.checklist.length}</span></button>`;
       }).join('')}</div>`
-      : `<div class="empty">${clients.length ? 'Everyone is fully onboarded.' : `No clients yet for ${esc(c.name)}. Tap <strong>Onboard client</strong> to add one.`}</div>`}
+      : `<div class="empty">${clients.length ? 'Everyone is fully onboarded.' : 'No clients yet. Tap <strong>Onboard client</strong> to add one.'}</div>`}
     </section>
   `;
 
   view.querySelector('#open-switcher').onclick = openSwitcher;
+  view.querySelectorAll('[data-gc]').forEach((b) => (b.onclick = () => {
+    openRow = openRow === b.dataset.gc ? null : b.dataset.gc;
+    renderHome();
+    const row = view.querySelector(`[data-gc="${b.dataset.gc}"]`);
+    if (row) row.focus({ preventScroll: true });
+  }));
+  view.querySelectorAll('[data-see]').forEach((b) => (b.onclick = () => ctx.go('money-co', b.dataset.see)));
   // Screens opened from Home stay "on" Home, so Back returns straight here.
   view.querySelector('[data-onboard]').onclick = () => ctx.go('client-form');
   view.querySelector('[data-new-quote]').onclick = () => { state.preset = null; ctx.go('doc-edit'); };
   view.querySelectorAll('[data-client]').forEach((b) => (b.onclick = () => ctx.go('client', b.dataset.client)));
-  view.querySelector('[data-record]').onclick = () => { state.preset = { type: 'in' }; ctx.go('txn'); };
+  view.querySelector('[data-record]').onclick = () => { state.preset = { type: 'in', company: state.company }; ctx.go('txn'); };
   view.querySelector('[data-calc]').onclick = () => ctx.go('calc');
   view.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => ctx.go('doc', b.dataset.inv)));
   const gs = view.querySelector('[data-goto-settings]');
@@ -202,7 +255,7 @@ async function render() {
   const screens = {
     'client-form': renderClientForm, client: renderClient,
     profile: renderProfile, rate: renderRateForm,
-    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc, 'money-co': renderMoneyCompany,
+    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc, 'money-co': renderMoneyCompany, group: renderGroup,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
   else if (state.tab === 'home') {
@@ -252,7 +305,7 @@ window.addEventListener('popstate', (e) => {
 function openSwitcher() {
   const list = document.getElementById('switcher-list');
   list.setAttribute('role', 'radiogroup');
-  list.innerHTML = COMPANY_ORDER.map((id) => {
+  list.innerHTML = BRAND_ORDER.map((id) => {
     const c = COMPANIES[id];
     return `
       <button class="company-option" role="radio" data-company="${id}" aria-checked="${id === state.company}"
