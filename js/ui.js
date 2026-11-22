@@ -28,6 +28,7 @@ export const ICONS = {
   check: '<path d="M5 12l5 5 9-10"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   minus: '<path d="M5 12h14"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   arrowIn: '<path d="M17 7L7 17M7 9v8h8"/>',
   arrowOut: '<path d="M7 17L17 7M9 7h8v8"/>',
   wallet: '<path d="M20 7H5a2 2 0 0 1 0-4h13v4"/><path d="M3 5v14a2 2 0 0 0 2 2h15V7"/><path d="M16 14h.01"/>',

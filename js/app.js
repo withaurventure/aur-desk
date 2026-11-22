@@ -5,7 +5,7 @@ import { esc, inr, icon, toast } from './ui.js';
 import { hasPin, runLock } from './lock.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
 import { renderSettings, renderProfile, renderRateForm } from './settings.js';
-import { renderDocuments, renderEditor, renderDoc } from './quote.js';
+import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.js';
 import { renderMoney, renderTxnForm } from './money.js';
 import { invoiceState, money, fmtDate, addDays } from './docs.js';
 
@@ -39,6 +39,8 @@ const ctx = {
   company: () => COMPANIES[state.company],
   profile: (id = state.company) => ({ ...DEFAULT_PROFILES[id], ...(cache.profiles[id] || {}) }),
   go(sub, id = null) {
+    if (state.sub === sub && state.id === id && sub !== 'doc-edit') return; // double tap: don't stack the same screen
+    if (sub === 'doc-edit') resetEditor();
     state.sub = sub; state.id = id;
     history.pushState({ tab: state.tab, sub, id }, '');
     render();
@@ -155,16 +157,17 @@ function renderHome() {
   `;
 
   view.querySelector('#open-switcher').onclick = openSwitcher;
-  view.querySelector('[data-onboard]').onclick = () => { setTab('clients'); ctx.go('client-form'); };
-  view.querySelector('[data-new-quote]').onclick = () => { state.preset = null; setTab('documents'); ctx.go('doc-edit'); };
-  view.querySelectorAll('[data-client]').forEach((b) => (b.onclick = () => { setTab('clients'); ctx.go('client', b.dataset.client); }));
-  view.querySelector('[data-record]').onclick = () => { setTab('money'); state.preset = { type: 'in' }; ctx.go('txn'); };
+  // Screens opened from Home stay "on" Home, so Back returns straight here.
+  view.querySelector('[data-onboard]').onclick = () => ctx.go('client-form');
+  view.querySelector('[data-new-quote]').onclick = () => { state.preset = null; ctx.go('doc-edit'); };
+  view.querySelectorAll('[data-client]').forEach((b) => (b.onclick = () => ctx.go('client', b.dataset.client)));
+  view.querySelector('[data-record]').onclick = () => { state.preset = { type: 'in' }; ctx.go('txn'); };
   view.querySelector('[data-money]').onclick = () => setTab('money');
-  view.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => { setTab('documents'); ctx.go('doc', b.dataset.inv); }));
+  view.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => ctx.go('doc', b.dataset.inv)));
   const gs = view.querySelector('[data-goto-settings]');
   if (gs) gs.onclick = () => setTab('settings');
   const gp = view.querySelector('[data-goto-profile]');
-  if (gp) gp.onclick = () => { setTab('settings'); ctx.go('profile'); };
+  if (gp) gp.onclick = () => ctx.go('profile');
 }
 
 /* ---------- router ---------- */
@@ -196,9 +199,15 @@ async function render() {
   window.scrollTo(0, 0);
 }
 
+// History is kept flat: [Home] or [Home, another tab] (+ any screens opened on top).
+// So Back from any tab goes to Home, and Back on Home closes the app. Switching tabs never stacks.
 function setTab(tab) {
+  if (tab === state.tab && !state.sub) return;
+  const fromHome = state.tab === 'home';
+  if (tab === 'home') { history.back(); return; }           // popstate brings Home back
   state.tab = tab; state.sub = null; state.id = null;
-  history.replaceState({ tab }, '');
+  if (fromHome) history.pushState({ tab }, '');
+  else history.replaceState({ tab }, '');
   render();
 }
 
@@ -209,6 +218,7 @@ tabbar.addEventListener('click', (e) => {
 
 window.addEventListener('popstate', (e) => {
   const s = e.state || {};
+  if (state.sub === 'doc-edit' && s.sub !== 'doc-edit') resetEditor(); // phone Back out of the editor drops the unsaved draft
   state.tab = s.tab || 'home';
   state.sub = s.sub || null;
   state.id = s.id || null;
