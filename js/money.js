@@ -3,6 +3,7 @@
 import { db } from './db.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox } from './ui.js';
 import { money, fmtDate, today, invoiceState, syncInvoice, nextNumber } from './docs.js';
+import { COMPANIES, COMPANY_ORDER } from './companies.js';
 
 export const METHODS = ['UPI', 'Bank transfer (NEFT/IMPS/RTGS)', 'Cash', 'Card', 'Cheque', 'PayPal', 'Wise', 'Other'];
 export const OUT_CATEGORIES = [
@@ -14,39 +15,88 @@ const DEFAULT_ACCOUNTS = ['Bank account', 'UPI', 'Cash in hand'];
 let month = today().slice(0, 7); // YYYY-MM
 let filter = 'all';
 
-/* =================== Money tab =================== */
-export function renderMoney(ctx, view) {
-  const company = ctx.state.company;
-  const all = ctx.cache.txns.filter((t) => t.company === company);
-  const inMonth = all.filter((t) => t.date.startsWith(month));
-  const shown = inMonth.filter((t) => filter === 'all' || t.type === filter)
-    .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+/* =================== shared bits =================== */
+const n = (v) => Number(v || 0);
+const sumOf = (list, type, cur = 'INR') => list.filter((t) => t.type === type && (t.currency || 'INR') === cur).reduce((s, t) => s + n(t.amount), 0);
+const totalsOf = (list) => ({ in: sumOf(list, 'in'), out: sumOf(list, 'out'), inUsd: sumOf(list, 'in', 'USD'), outUsd: sumOf(list, 'out', 'USD') });
+const signed = (v) => (v < 0 ? '−' : '') + money(Math.abs(v));
+const monthLabel = () => new Date(month + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
-  const sum = (type, cur) => inMonth.filter((t) => t.type === type && (t.currency || 'INR') === cur).reduce((s, t) => s + Number(t.amount || 0), 0);
-  const inr = { in: sum('in', 'INR'), out: sum('out', 'INR') };
-  const usd = { in: sum('in', 'USD'), out: sum('out', 'USD') };
-  const label = new Date(month + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+function monthRow() {
   const isThisMonth = month === today().slice(0, 7);
-
-  // group the list by day
+  return `
+    <div class="month-row">
+      <button class="icon-btn" data-month="-1" aria-label="Previous month">${icon('back')}</button>
+      <strong>${esc(monthLabel())}</strong>
+      <button class="icon-btn" data-month="1" aria-label="Next month" ${isThisMonth ? 'disabled' : ''}>${icon('right')}</button>
+    </div>`;
+}
+function bindMonth(view, redraw) {
+  view.querySelectorAll('[data-month]').forEach((b) => (b.onclick = () => {
+    const d = new Date(month + '-01T00:00:00');
+    d.setMonth(d.getMonth() + Number(b.dataset.month));
+    month = d.toLocaleDateString('en-CA').slice(0, 7);
+    redraw();
+  }));
+}
+function sumCard(t) {
+  return `
+    <section class="money-sum">
+      <div><small>In</small><strong class="in">${esc(money(t.in))}</strong></div>
+      <div><small>Out</small><strong class="out">${esc(money(t.out))}</strong></div>
+      <div><small>Net</small><strong>${esc(signed(t.in - t.out))}</strong></div>
+      ${t.inUsd || t.outUsd ? `<p class="usd-line">Dollars: in ${esc(money(t.inUsd, 'USD'))} · out ${esc(money(t.outUsd, 'USD'))}</p>` : ''}
+    </section>`;
+}
+function entryList(list, showCompany, emptyText) {
+  const shown = list.filter((t) => filter === 'all' || t.type === filter)
+    .sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
   const days = shown.reduce((acc, t) => ((acc[t.date] ||= []).push(t), acc), {});
+  return `
+    <div class="seg" role="radiogroup" aria-label="Show">
+      ${[['all', 'All'], ['in', 'In'], ['out', 'Out']].map(([v, l]) => `
+        <input type="radio" name="mfilter" id="mf-${v}" value="${v}" ${filter === v ? 'checked' : ''}><label for="mf-${v}">${l}</label>`).join('')}
+    </div>
+    ${shown.length ? Object.entries(days).map(([day, items]) => `
+      <section class="section">
+        <h2 class="day-head">${esc(fmtDate(day))}</h2>
+        <div class="list">${items.map((t) => txnRow(t, showCompany)).join('')}</div>
+      </section>`).join('')
+    : `<div class="empty">${emptyText}</div>`}`;
+}
+
+/* =================== Money tab: all three companies together =================== */
+export function renderMoney(ctx, view) {
+  const inMonth = ctx.cache.txns.filter((t) => t.date.startsWith(month));
+  const overall = totalsOf(inMonth);
+  const per = COMPANY_ORDER.map((id) => ({ id, co: COMPANIES[id], ...totalsOf(inMonth.filter((t) => t.company === id)) }));
 
   view.innerHTML = `
     <div class="title-row">
       <h1 class="page-title">Money</h1>
+      <span class="muted">All companies</span>
     </div>
+    ${monthRow()}
+    ${sumCard(overall)}
 
-    <div class="month-row">
-      <button class="icon-btn" data-month="-1" aria-label="Previous month">${icon('back')}</button>
-      <strong>${esc(label)}</strong>
-      <button class="icon-btn" data-month="1" aria-label="Next month" ${isThisMonth ? 'disabled' : ''}>${icon('right')}</button>
-    </div>
-
-    <section class="money-sum">
-      <div><small>In</small><strong class="in">${esc(money(inr.in))}</strong></div>
-      <div><small>Out</small><strong class="out">${esc(money(inr.out))}</strong></div>
-      <div><small>Net</small><strong>${esc((inr.in - inr.out < 0 ? '−' : '') + money(Math.abs(inr.in - inr.out)))}</strong></div>
-      ${usd.in || usd.out ? `<p class="usd-line">Dollars: in ${esc(money(usd.in, 'USD'))} · out ${esc(money(usd.out, 'USD'))}</p>` : ''}
+    <section class="section">
+      <div class="section-head"><h2>By company</h2><span class="muted">tap for details</span></div>
+      <div class="card co-list">
+        ${per.map((c) => {
+          const net = c.in - c.out;
+          const empty = !c.in && !c.out && !c.inUsd && !c.outUsd;
+          return `
+          <button class="co-row" data-co="${c.id}" style="--co:${c.co.theme.dot}">
+            <span class="co-dot" aria-hidden="true"></span>
+            <span class="list-main">
+              <strong>${esc(c.co.name)}</strong>
+              <small>${empty ? 'Nothing this month' : `In ${esc(money(c.in))} · Out ${esc(money(c.out))}${c.inUsd || c.outUsd ? ` · $ in ${esc(money(c.inUsd, 'USD'))}` : ''}`}</small>
+            </span>
+            <span class="co-net ${net < 0 ? 'neg' : net > 0 ? 'pos' : ''}"><small>Net</small>${esc(signed(net))}</span>
+            ${icon('right', 'row-arrow')}
+          </button>`;
+        }).join('')}
+      </div>
     </section>
 
     <div class="row-2">
@@ -54,37 +104,75 @@ export function renderMoney(ctx, view) {
       <button class="btn btn-ghost" data-add="out">${icon('minus')}Money out</button>
     </div>
 
-    <div class="seg" role="radiogroup" aria-label="Show">
-      ${[['all', 'All'], ['in', 'In'], ['out', 'Out']].map(([v, l]) => `
-        <input type="radio" name="mfilter" id="mf-${v}" value="${v}" ${filter === v ? 'checked' : ''}><label for="mf-${v}">${l}</label>`).join('')}
-    </div>
-
-    ${shown.length ? Object.entries(days).map(([day, list]) => `
-      <section class="section">
-        <h2 class="day-head">${esc(fmtDate(day))}</h2>
-        <div class="list">${list.map(txnRow).join('')}</div>
-      </section>`).join('')
-    : `<div class="empty">${all.length ? 'Nothing recorded in this month.' : `Nothing recorded yet for ${esc(ctx.company().name)}.<br>Add every payment you receive or make, and your invoices and Home figures stay up to date.`}</div>`}
+    ${entryList(inMonth, true, ctx.cache.txns.length ? 'Nothing recorded in this month.' : 'Nothing recorded yet.<br>Add every payment you receive or make, and your invoices and Home figures stay up to date.')}
   `;
 
-  view.querySelectorAll('[data-month]').forEach((b) => (b.onclick = () => {
-    const d = new Date(month + '-01T00:00:00');
-    d.setMonth(d.getMonth() + Number(b.dataset.month));
-    month = d.toLocaleDateString('en-CA').slice(0, 7);
-    renderMoney(ctx, view);
-  }));
+  bindMonth(view, () => renderMoney(ctx, view));
   view.querySelectorAll('input[name=mfilter]').forEach((r) => (r.onchange = () => { filter = r.value; renderMoney(ctx, view); }));
+  view.querySelectorAll('[data-co]').forEach((b) => (b.onclick = () => ctx.go('money-co', b.dataset.co)));
   view.querySelectorAll('[data-add]').forEach((b) => (b.onclick = () => { ctx.state.preset = { type: b.dataset.add }; ctx.go('txn'); }));
   bindTxnRows(ctx, view);
 }
 
-export function txnRow(t) {
+/* =================== one company in detail =================== */
+export function renderMoneyCompany(ctx, view) {
+  const id = ctx.state.id;
+  const co = COMPANIES[id];
+  if (!co) { view.innerHTML = `${pageHeader('Money')}<div class="empty">Unknown company.</div>`; return; }
+  const inMonth = ctx.cache.txns.filter((t) => t.company === id && t.date.startsWith(month));
+  const t = totalsOf(inMonth);
+
+  // where the money came from and where it went (rupees)
+  const group = (type, keyOf) => Object.entries(inMonth
+    .filter((x) => x.type === type && (x.currency || 'INR') === 'INR')
+    .reduce((acc, x) => { const k = keyOf(x) || 'Not set'; acc[k] = (acc[k] || 0) + n(x.amount); return acc; }, {}))
+    .sort((a, b) => b[1] - a[1]);
+  const sources = group('in', (x) => x.party);
+  const costs = group('out', (x) => x.category);
+  const bars = (rows, total, cls) => rows.map(([k, v]) => `
+    <div class="bar-row">
+      <span class="bar-label"><span>${esc(k)}</span><strong>${esc(money(v))}</strong></span>
+      <span class="bar-track"><span class="bar-fill ${cls}" style="width:${total ? Math.max(3, Math.round(v / total * 100)) : 0}%"></span></span>
+    </div>`).join('');
+
+  view.innerHTML = `
+    ${pageHeader(co.name, 'Money in & out')}
+    ${monthRow()}
+    ${sumCard(t)}
+
+    <section class="section">
+      <div class="section-head"><h2>Money in by source</h2><span class="muted">${esc(money(t.in))}</span></div>
+      ${sources.length ? `<div class="card bars">${bars(sources, t.in, 'in')}</div>` : '<div class="empty">No money in this month.</div>'}
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Expenses by type</h2><span class="muted">${esc(money(t.out))}</span></div>
+      ${costs.length ? `<div class="card bars">${bars(costs, t.out, 'out')}</div>` : '<div class="empty">No expenses this month.</div>'}
+    </section>
+
+    <div class="row-2">
+      <button class="btn btn-primary" data-add="in">${icon('plus')}Money in</button>
+      <button class="btn btn-ghost" data-add="out">${icon('minus')}Money out</button>
+    </div>
+
+    <h2 class="form-section">All entries</h2>
+    ${entryList(inMonth, false, `Nothing recorded for ${esc(co.name)} in this month.`)}
+  `;
+
+  bindMonth(view, () => renderMoneyCompany(ctx, view));
+  view.querySelectorAll('input[name=mfilter]').forEach((r) => (r.onchange = () => { filter = r.value; renderMoneyCompany(ctx, view); }));
+  view.querySelectorAll('[data-add]').forEach((b) => (b.onclick = () => { ctx.state.preset = { type: b.dataset.add, company: id }; ctx.go('txn'); }));
+  view.querySelectorAll('[data-back]').forEach((b) => (b.onclick = () => ctx.back()));
+  bindTxnRows(ctx, view);
+}
+
+export function txnRow(t, showCompany = false) {
   const sub = [t.type === 'in' ? 'into ' + (t.account || '-') : 'from ' + (t.account || '-'), t.method, t.invoiceNumber, t.type === 'out' ? t.category : '']
     .filter(Boolean).join(' · ');
   return `
     <button class="list-row" data-txn="${t.id}">
       <span class="txn-icon ${t.type}" aria-hidden="true">${icon(t.type === 'in' ? 'arrowIn' : 'arrowOut')}</span>
-      <span class="list-main"><strong>${esc(t.party || (t.type === 'in' ? 'Money in' : 'Money out'))}</strong><small>${esc(sub)}</small></span>
+      <span class="list-main"><strong>${esc(t.party || (t.type === 'in' ? 'Money in' : 'Money out'))}</strong><small>${showCompany && COMPANIES[t.company] ? `<span class="co-tag" style="--co:${COMPANIES[t.company].theme.dot}">${esc(COMPANIES[t.company].short)}</span>` : ''}${esc(sub)}</small></span>
       <strong class="txn-amt ${t.type}">${t.type === 'in' ? '+' : '−'}${esc(money(t.amount, t.currency || 'INR'))}</strong>
     </button>`;
 }
@@ -97,7 +185,7 @@ export function renderTxnForm(ctx, view) {
   const { cache, state } = ctx;
   const existing = state.id ? cache.txns.find((t) => t.id === state.id) : null;
   const preset = state.preset || {};
-  const company = existing ? existing.company : state.company;
+  const company = existing ? existing.company : (preset.company && COMPANIES[preset.company] ? preset.company : state.company);
   const openInvoices = cache.docs
     .filter((d) => d.kind === 'invoice' && d.company === company)
     .map((d) => ({ d, s: invoiceState(d, cache.txns.filter((t) => !existing || t.id !== existing.id)) }))
@@ -117,8 +205,15 @@ export function renderTxnForm(ctx, view) {
   const accounts = [...new Set([...cache.txns.map((x) => x.account), ...DEFAULT_ACCOUNTS].filter(Boolean))];
 
   view.innerHTML = `
-    ${pageHeader(existing ? (existing.type === 'in' ? 'Money in' : 'Money out') : 'Record money', ctx.company().name)}
+    ${pageHeader(existing ? (existing.type === 'in' ? 'Money in' : 'Money out') : 'Record money', COMPANIES[company].name)}
     <form class="form" id="txn-form" novalidate>
+      ${existing ? '' : `
+      <fieldset class="field">
+        <legend>Company</legend>
+        <div class="seg" role="radiogroup">
+          ${COMPANY_ORDER.map((id) => `<input type="radio" name="company" id="co-${id}" value="${id}" ${id === company ? 'checked' : ''}><label for="co-${id}">${esc(COMPANIES[id].short)}</label>`).join('')}
+        </div>
+      </fieldset>`}
       <div class="seg seg-money" role="radiogroup" aria-label="Type">
         <input type="radio" name="type" id="ty-in" value="in" ${t.type === 'in' ? 'checked' : ''}><label for="ty-in">Money in</label>
         <input type="radio" name="type" id="ty-out" value="out" ${t.type === 'out' ? 'checked' : ''}><label for="ty-out">Money out</label>
@@ -206,6 +301,11 @@ export function renderTxnForm(ctx, view) {
     return hit;
   };
   form.querySelectorAll('input[name=type]').forEach((r) => (r.onchange = applyType));
+  // switching company redraws the form (its invoices and names differ); keeps money in/out choice
+  form.querySelectorAll('input[name=company]').forEach((r) => (r.onchange = () => {
+    state.preset = { ...(state.preset || {}), company: r.value, type: form.querySelector('input[name=type]:checked').value, invoiceId: '' };
+    renderTxnForm(ctx, view);
+  }));
   view.querySelector('#t-invoice').onchange = () => {
     const hit = invHint();
     if (hit) {

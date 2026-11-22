@@ -18,6 +18,8 @@ No app store, no build tools.
   to where you came from
 - Calculator: price check from the rate card (with your hourly floor), profit plan against this
   month's Money entries, printing size calculator; price check and printing turn into a quotation in one tap
+- Money tab shows all three companies together: total in / out / net for the month, one line per
+  company, and a detail view per company (money in by source, expenses by type, all entries)
 - Backup to Google Drive: encrypted on the phone with your backup password (AES-256-GCM), uploaded
   to an "AUR Desk Backups" folder (app can only see its own files), newest 10 kept, one-tap or
   automatic (after every change, hourly, daily, every 2 days, weekly, monthly), restore from Drive

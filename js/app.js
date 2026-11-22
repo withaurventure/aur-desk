@@ -6,7 +6,7 @@ import { hasPin, runLock } from './lock.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
 import { renderSettings, renderProfile, renderRateForm } from './settings.js';
 import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.js';
-import { renderMoney, renderTxnForm } from './money.js';
+import { renderMoney, renderMoneyCompany, renderTxnForm } from './money.js';
 import { renderCalc } from './calc.js';
 import { invoiceState, money, fmtDate, addDays } from './docs.js';
 import { status as backupStatus, isDue as backupIsDue, backupToDrive, startAutoBackup, autoBackup, warmUp, explain as backupError } from './backup.js';
@@ -202,7 +202,7 @@ async function render() {
   const screens = {
     'client-form': renderClientForm, client: renderClient,
     profile: renderProfile, rate: renderRateForm,
-    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc,
+    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc, 'money-co': renderMoneyCompany,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
   else if (state.tab === 'home') {
