@@ -3,8 +3,11 @@ import { db } from './db.js';
 import { COMPANIES } from './companies.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox, priceLine, BILLING } from './ui.js';
 import { runLock, bioAvailable, bioEnabled, enableBio, disableBio } from './lock.js';
+import {
+  status as backupStatus, setPassword, setPrefs, connect, disconnect, backupToDrive, FREQS, explain,
+  listDriveBackups, downloadDriveBackup, decryptFile, restorePayload, summary, encryptedFileForPhone, warmUp,
+} from './backup.js';
 
-const BACKUP_KEYS = ['profiles', 'owner', 'counters'];
 
 /* ---------- main settings page ---------- */
 export async function renderSettings(ctx, view) {
@@ -14,7 +17,7 @@ export async function renderSettings(ctx, view) {
     .sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15) || a.name.localeCompare(b.name));
   const groups = groupBy(rates, 'group');
   const [bioOk, bioOn] = [await bioAvailable(), await bioEnabled()];
-  const last = ctx.cache.lastBackup ? new Date(ctx.cache.lastBackup).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'never';
+  const bk = await backupStatus();
   const missing = [!p.upi && 'UPI ID', !p.email && 'email'].filter(Boolean);
 
   view.innerHTML = `
@@ -60,13 +63,9 @@ export async function renderSettings(ctx, view) {
       <p class="hint">The app locks itself when it has been in the background for 1 minute.</p>
     </section>
 
-    <section class="section">
-      <div class="section-head"><h2>Backup</h2><span class="muted">Last: ${esc(last)}</span></div>
-      <div class="row-2">
-        <button class="btn btn-primary" data-backup>${icon('backup')}Back up now</button>
-        <label class="btn btn-ghost file-btn">${icon('restore')}Restore<input type="file" id="restore-file" accept=".txt,.json,application/json,text/plain"></label>
-      </div>
-      <p class="hint">Back up saves one file with all three companies' clients, quotations, invoices, money entries, prices and details. Save it to Google Drive. Your PIN is not included.</p>
+    <section class="section" id="backup-section">
+      <div class="section-head"><h2>Backup to Google Drive</h2></div>
+      ${backupCard(bk)}
     </section>
 
     <section class="section">
@@ -78,15 +77,14 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <button class="btn btn-ghost btn-block" data-update>Check for updates</button>
-    <p class="version">AUR Desk · step 5.1 · data stays on this phone</p>
+    <p class="version">AUR Desk · step 6 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
   view.querySelectorAll('[data-rate]').forEach((b) => (b.onclick = () => ctx.go('rate', b.dataset.rate)));
 
   view.querySelector('#import-rates').onchange = (e) => importRates(ctx, e.target);
-  view.querySelector('#restore-file').onchange = (e) => restore(ctx, e.target);
-  view.querySelector('[data-backup]').onclick = () => backup(ctx);
+  bindBackup(ctx, view, bk);
 
   view.querySelector('[data-change-pin]').onclick = async () => {
     await runLock('setup', { cancellable: true });
@@ -306,55 +304,255 @@ async function importRates(ctx, input) {
   toast(`${data.items.length} prices imported`);
 }
 
-async function backup(ctx) {
-  const payload = {
-    app: 'aur-desk', kind: 'backup', version: 1, exportedAt: new Date().toISOString(),
-    clients: await db.all('clients'),
-    rates: await db.all('rates'),
-    docs: await db.all('docs'),
-    txns: await db.all('txns'),
-    kv: Object.fromEntries(await Promise.all(BACKUP_KEYS.map(async (k) => [k, await db.getKV(k)]))),
+/* =================== Backup to Google Drive =================== */
+const when = (iso) => new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+
+function backupCard(bk) {
+  const step = (n, done, title, sub, action) => `
+    <div class="setup-step ${done ? 'done' : ''}">
+      <span class="step-no" aria-hidden="true">${done ? icon('check') : n}</span>
+      <span class="step-text"><strong>${title}</strong><small>${sub}</small></span>
+      ${action}
+    </div>`;
+
+  if (!bk.ready) {
+    return `
+      <div class="card setup">
+        <p class="hint">Three one-time steps. After that, AUR Desk backs up to Google Drive by itself, encrypted with your password.</p>
+        ${step(1, bk.hasPassword, 'Backup password', bk.hasPassword ? 'Set. Backups are encrypted with it.' : 'Locks every backup so only you can open it.',
+          `<button class="btn btn-ghost btn-sm" data-set-password>${bk.hasPassword ? 'Change' : 'Set'}</button>`)}
+        ${step(2, !!bk.prefs.clientId, 'Google Client ID', bk.prefs.clientId ? esc(bk.prefs.clientId.slice(0, 18)) + '…' : 'From your Google Cloud setup. Paste it once.',
+          `<button class="btn btn-ghost btn-sm" data-client-id>${bk.prefs.clientId ? 'Change' : 'Paste'}</button>`)}
+        ${step(3, bk.connected, 'Connect Google Drive', bk.connected ? esc(bk.prefs.email) : 'Sign in with the AUR Ventures Google account.',
+          `<button class="btn btn-primary btn-sm" data-connect ${bk.hasPassword && bk.prefs.clientId ? '' : 'disabled'}>Connect</button>`)}
+      </div>
+      ${restoreFileButton()}`;
+  }
+
+  const err = bk.error && (!bk.last || new Date(bk.error.at) > new Date(bk.last));
+  return `
+    <div class="card backup-status">
+      <div class="bs-row">
+        <span class="bs-icon ${err ? 'bad' : 'good'}" aria-hidden="true">${icon(err ? 'close' : 'check')}</span>
+        <span class="step-text">
+          <strong>${bk.last ? 'Last backup ' + esc(when(bk.last)) : 'No backup yet'}</strong>
+          <small>${err ? esc(explain({ message: bk.error.message })) : 'To ' + esc(bk.prefs.email) + ' · encrypted · newest 10 kept'}</small>
+        </span>
+      </div>
+      <button class="btn btn-primary btn-block" data-backup-now>${icon('backup')}Back up now</button>
+      <div class="field">
+        <label for="auto-freq">Auto-backup</label>
+        <select id="auto-freq">${Object.entries(FREQS).map(([v, l]) => `<option value="${v}" ${v === bk.prefs.freq ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <small class="hint">Runs by itself while AUR Desk is open, only when something has changed. If Google needs you to sign in again, Home shows a one-tap "Back up now".</small>
+      </div>
+      <button class="btn btn-ghost btn-block" data-restore-drive>${icon('restore')}Restore from Google Drive</button>
+      <details class="more">
+        <summary>More backup options</summary>
+        <div class="more-body">
+          <button class="btn btn-ghost btn-block" data-phone-copy>${icon('backup')}Save an encrypted copy to this phone</button>
+          ${restoreFileButton()}
+          <button class="btn btn-ghost btn-block" data-set-password>Change backup password</button>
+          <button class="btn btn-ghost btn-block" data-client-id>Change Google Client ID</button>
+          <button class="btn btn-danger-ghost btn-block" data-disconnect>Disconnect Google Drive</button>
+        </div>
+      </details>
+    </div>`;
+}
+const restoreFileButton = () => `<label class="btn btn-ghost btn-block file-btn">${icon('restore')}Restore from a backup file<input type="file" id="restore-file" accept=".aurdesk,.txt,.json,application/json,text/plain,application/octet-stream"></label>`;
+
+function bindBackup(ctx, view, bk) {
+  const on = (sel, fn) => view.querySelectorAll(sel).forEach((b) => (b.onclick = fn));
+  const busy = async (btn, label, fn) => {
+    const old = btn.innerHTML; btn.disabled = true; btn.textContent = label;
+    try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = old; }
   };
-  const date = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, phone's own time zone
-  // .txt so Android's share menu accepts it; AUR Desk reads it back as normal.
-  const file = new File([JSON.stringify(payload, null, 1)], `aur-desk-backup-${date}.txt`, { type: 'text/plain' });
-  let shared = false;
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'AUR Desk backup' }); shared = true; }
-    catch (err) { if (err.name === 'AbortError') return; }
-  }
-  if (!shared) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(file);
-    a.download = file.name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }
-  await db.setKV('lastBackup', new Date().toISOString());
-  await ctx.reload();
-  toast(shared ? 'Backup ready. Choose Drive to save it' : 'Backup saved to Downloads');
+  warmUp();
+
+  on('[data-set-password]', async () => {
+    const pw = await passwordDialog({
+      title: bk.hasPassword ? 'Change backup password' : 'Set a backup password',
+      text: 'At least 8 characters. Write it down somewhere safe: without it, your backups cannot be opened, not even by me. Backups made before a change still need the old password.',
+      confirm: true,
+    });
+    if (!pw) return;
+    await setPassword(pw);
+    toast('Backup password saved');
+    ctx.render();
+  });
+
+  on('[data-client-id]', async () => {
+    const id = await textDialog({
+      title: 'Google Client ID',
+      text: 'Paste the Client ID from Google Cloud. It ends in .apps.googleusercontent.com',
+      value: bk.prefs.clientId, placeholder: '1234567890-abc….apps.googleusercontent.com',
+    });
+    if (id == null) return;
+    const clean = id.trim();
+    if (clean && !/\.apps\.googleusercontent\.com$/.test(clean)) { toast("That doesn't look like a Client ID"); return; }
+    await setPrefs({ clientId: clean });
+    warmUp();
+    toast('Client ID saved');
+    ctx.render();
+  });
+
+  on('[data-connect]', async (e) => busy(e.currentTarget, 'Opening Google…', async () => {
+    try {
+      const email = await connect();
+      toast(`Connected to ${email}`);
+      if (email && email.toLowerCase() !== 'withaurventure@gmail.com') toast(`Connected to ${email}. If you meant AUR Ventures, disconnect and sign in with withaurventure@gmail.com.`);
+      await backupToDrive({ interactive: true }).catch(() => {});
+      await ctx.reload();
+    } catch (err) { toast(explain(err)); }
+  }));
+
+  on('[data-backup-now]', async (e) => busy(e.currentTarget, 'Backing up…', async () => {
+    try { await backupToDrive({ interactive: true }); toast('Backed up to Google Drive'); }
+    catch (err) { toast(explain(err)); }
+    await ctx.reload();
+  }));
+
+  const freq = view.querySelector('#auto-freq');
+  if (freq) freq.onchange = async () => { await setPrefs({ freq: freq.value }); toast('Auto-backup: ' + FREQS[freq.value]); };
+
+  on('[data-restore-drive]', async (e) => {
+    let files;
+    await busy(e.currentTarget, 'Loading backups…', async () => {
+      try { files = await listDriveBackups(); } catch (err) { toast(explain(err)); }
+    });
+    if (!files) return;
+    if (!files.length) { toast('No backups in Google Drive yet'); return; }
+    const id = await pickBackup(files);
+    if (!id) return;
+    let file;
+    try { file = await downloadDriveBackup(id); } catch (err) { toast(explain(err)); return; }
+    await restoreFlow(ctx, file);
+  });
+
+  on('[data-phone-copy]', async () => {
+    try {
+      const file = await encryptedFileForPhone();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('Encrypted copy saved to Downloads');
+    } catch (err) { toast(explain(err)); }
+  });
+
+  const fileIn = view.querySelector('#restore-file');
+  if (fileIn) fileIn.onchange = async () => {
+    const data = await readFile(fileIn);
+    if (data) await restoreFlow(ctx, data);
+  };
+
+  on('[data-disconnect]', async () => {
+    const ok = await confirmBox({ title: 'Disconnect Google Drive?', text: 'Auto-backup stops. Your backups stay in Google Drive, and nothing on this phone is deleted.', ok: 'Disconnect', danger: true });
+    if (!ok) return;
+    await disconnect();
+    toast('Google Drive disconnected');
+    ctx.render();
+  });
 }
 
-async function restore(ctx, input) {
-  const data = await readFile(input);
-  if (!data) return;
-  if (data.app !== 'aur-desk' || data.kind !== 'backup') { toast("That file isn't an AUR Desk backup"); return; }
-  const when = new Date(data.exportedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+async function restoreFlow(ctx, file) {
+  if (!file || file.app !== 'aur-desk' || !['backup', 'backup-encrypted'].includes(file.kind)) { toast("That isn't an AUR Desk backup"); return; }
+  let data = file;
+  if (file.kind === 'backup-encrypted') {
+    for (;;) {
+      const pw = await passwordDialog({ title: 'Backup password', text: `Enter the password this backup was made with (${when(file.exportedAt)}).` });
+      if (!pw) return;
+      try { data = await decryptFile(file, pw); break; }
+      catch (err) { toast(explain(err)); }
+    }
+  }
   const ok = await confirmBox({
-    title: 'Restore this backup?',
-    text: `From ${when}: ${data.clients.length} clients, ${(data.docs || []).length} documents, ${(data.txns || []).length} money entries and ${data.rates.length} prices. Everything currently in AUR Desk will be replaced.`,
+    title: 'Replace everything with this backup?',
+    text: `From ${when(data.exportedAt)}: ${summary(data)}. Everything currently in AUR Desk on this phone will be replaced. Your PIN stays the same.`,
     ok: 'Replace and restore', danger: true,
   });
   if (!ok) return;
-  await db.clear('clients');
-  await db.clear('rates');
-  await db.clear('docs');
-  await db.clear('txns');
-  for (const c of data.clients) await db.put('clients', c);
-  for (const t of data.txns || []) await db.put('txns', t);
-  for (const d of data.docs || []) await db.put('docs', d);
-  for (const r of data.rates) await db.put('rates', r);
-  for (const k of BACKUP_KEYS) if (data.kv && k in data.kv) await db.setKV(k, data.kv[k]);
+  await restorePayload(data);
   await ctx.reload();
   toast('Backup restored');
+}
+
+/* ---------- small dialogs ---------- */
+function passwordDialog({ title, text, confirm = false }) {
+  const dlg = document.getElementById('confirm');
+  dlg.innerHTML = `
+    <h2 class="sheet-title">${esc(title)}</h2>
+    <p class="confirm-text">${esc(text)}</p>
+    <form class="form" id="pw-form" method="dialog" novalidate>
+      <div class="field"><label for="pw1">Password</label><input id="pw1" type="password" autocomplete="new-password" minlength="8" required></div>
+      ${confirm ? '<div class="field"><label for="pw2">Type it again</label><input id="pw2" type="password" autocomplete="new-password" required></div>' : ''}
+      <label class="check-row show-pw"><input type="checkbox" id="pw-show"><span>Show password</span></label>
+      <p class="form-error" id="pw-err" role="alert"></p>
+      <div class="row-2">
+        <button class="btn btn-ghost" type="button" value="no">Cancel</button>
+        <button class="btn btn-primary" type="submit">OK</button>
+      </div>
+    </form>`;
+  return new Promise((resolve) => {
+    const form = dlg.querySelector('#pw-form');
+    const p1 = dlg.querySelector('#pw1'), p2 = dlg.querySelector('#pw2'), err = dlg.querySelector('#pw-err');
+    dlg.querySelector('#pw-show').onchange = (e) => { [p1, p2].forEach((p) => p && (p.type = e.target.checked ? 'text' : 'password')); };
+    dlg.onclick = (e) => {
+      if (e.target.closest('button[value=no]') || e.target === dlg) { dlg.close(); resolve(null); }
+    };
+    dlg.oncancel = () => resolve(null);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      if (confirm && p1.value.length < 8) { err.textContent = 'Use at least 8 characters.'; return; }
+      if (!p1.value) { err.textContent = 'Enter the password.'; return; }
+      if (confirm && p1.value !== p2.value) { err.textContent = "The two passwords don't match."; return; }
+      dlg.close(); resolve(p1.value);
+    };
+    dlg.showModal();
+    p1.focus();
+  });
+}
+
+function textDialog({ title, text, value = '', placeholder = '' }) {
+  const dlg = document.getElementById('confirm');
+  dlg.innerHTML = `
+    <h2 class="sheet-title">${esc(title)}</h2>
+    <p class="confirm-text">${esc(text)}</p>
+    <form class="form" id="txt-form" novalidate>
+      <div class="field"><label for="txt1" class="sr-only">${esc(title)}</label>
+        <textarea id="txt1" rows="3" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="${esc(placeholder)}">${esc(value)}</textarea></div>
+      <div class="row-2">
+        <button class="btn btn-ghost" type="button" value="no">Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>`;
+  return new Promise((resolve) => {
+    dlg.onclick = (e) => { if (e.target.closest('button[value=no]') || e.target === dlg) { dlg.close(); resolve(null); } };
+    dlg.oncancel = () => resolve(null);
+    dlg.querySelector('#txt-form').onsubmit = (e) => { e.preventDefault(); dlg.close(); resolve(dlg.querySelector('#txt1').value); };
+    dlg.showModal();
+  });
+}
+
+function pickBackup(files) {
+  const dlg = document.getElementById('picker');
+  dlg.innerHTML = `
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 class="sheet-title">Choose a backup</h2>
+    <p class="hint">Newest first. Restoring replaces what's on this phone.</p>
+    <div class="picker-list">
+      ${files.map((f) => `
+        <button class="picker-row" data-file="${f.id}">
+          <span><strong>${esc(when(f.createdTime))}</strong><small>${esc((f.description || '').replace('AUR Desk encrypted backup · ', ''))}</small></span>
+          <span>${Math.max(1, Math.round(Number(f.size || 0) / 1024))} KB</span>
+        </button>`).join('')}
+    </div>
+    <button class="btn btn-ghost" data-close>Cancel</button>`;
+  return new Promise((resolve) => {
+    dlg.onclick = (e) => {
+      const b = e.target.closest('[data-file]');
+      if (b) { dlg.close(); resolve(b.dataset.file); return; }
+      if (e.target === dlg || e.target.closest('[data-close]')) { dlg.close(); resolve(null); }
+    };
+    dlg.oncancel = () => resolve(null);
+    dlg.showModal();
+  });
 }

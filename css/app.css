@@ -470,3 +470,28 @@ body.locked .app { visibility: hidden; }
 .chip-btn { min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid var(--border); background: var(--card); color: var(--navy); font: inherit; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .chip-btn.on { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
 .calc .set-row.card { border-radius: var(--radius); }
+
+/* =================== Google Drive backup =================== */
+.setup { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; }
+.setup > .hint { margin-bottom: 6px; }
+.setup-step { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 6px 0; }
+.setup-step + .setup-step { border-top: 1px solid #EEF0F5; }
+.step-no { width: 30px; height: 30px; flex: none; border-radius: 50%; background: var(--soft); color: var(--primary); font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+.setup-step.done .step-no { background: #E3F3EA; color: #1F7A52; }
+.step-no svg, .bs-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.step-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.step-text strong { font-size: 15px; }
+.step-text small { font-size: 12px; color: var(--slate); line-height: 1.4; overflow-wrap: anywhere; }
+.setup-step .btn-sm { flex: none; min-width: 84px; }
+.backup-status { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+.bs-row { display: flex; align-items: center; gap: 12px; }
+.bs-icon { width: 36px; height: 36px; flex: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+.bs-icon.good { background: #E3F3EA; color: #1F7A52; }
+.bs-icon.bad { background: var(--due-soft); color: var(--due); }
+.more summary { min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--primary); font-weight: 600; font-size: 14px; list-style: none; }
+.more summary::-webkit-details-marker { display: none; }
+.more summary::after { content: '▾'; font-size: 12px; }
+.more[open] summary::after { content: '▴'; }
+.more-body { display: flex; flex-direction: column; gap: 10px; padding-top: 6px; }
+.show-pw { padding: 0; min-height: 40px; font-size: 14px; }
+.btn:disabled { opacity: .5; }

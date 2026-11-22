@@ -9,6 +9,7 @@ import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.j
 import { renderMoney, renderTxnForm } from './money.js';
 import { renderCalc } from './calc.js';
 import { invoiceState, money, fmtDate, addDays } from './docs.js';
+import { status as backupStatus, isDue as backupIsDue, backupToDrive, startAutoBackup, autoBackup, warmUp, explain as backupError } from './backup.js';
 
 const STORE_KEY = 'aurdesk.company';
 const AUTO_LOCK_MS = 60 * 1000;
@@ -24,7 +25,7 @@ const state = {
   preset: null, // client chosen before opening a new quotation
   presetDraft: null, // items carried over from the Calculator
 };
-const cache = { clients: [], rates: [], docs: [], txns: [], profiles: {}, owner: 'Shashank', lastBackup: null };
+const cache = { clients: [], rates: [], docs: [], txns: [], profiles: {}, owner: 'Shashank', lastBackup: null, backup: null, backupDue: false };
 
 /* ---------- data ---------- */
 async function load() {
@@ -33,6 +34,8 @@ async function load() {
   ]);
   cache.profiles ||= {};
   cache.owner ||= 'Shashank';
+  cache.backup = await backupStatus();
+  cache.backupDue = await backupIsDue();
 }
 
 /* ---------- context handed to every screen ---------- */
@@ -95,8 +98,8 @@ function renderHome() {
   const clients = cache.clients.filter((x) => x.company === state.company);
   const onboarding = clients.filter((x) => (x.checklist || []).some((i) => !i.done));
   const openQuotes = cache.docs.filter((d) => d.company === state.company && d.kind === 'quote' && ['draft', 'sent', 'accepted'].includes(d.status)).length;
-  const hasData = cache.clients.length || cache.rates.length;
-  const staleBackup = hasData && (!cache.lastBackup || Date.now() - new Date(cache.lastBackup) > 7 * 864e5);
+  const hasData = cache.clients.length || cache.rates.length || cache.docs.length || cache.txns.length;
+  const bk = cache.backup || {};
   const p = ctx.profile();
 
   view.innerHTML = `
@@ -119,9 +122,13 @@ function renderHome() {
       <span class="label">${clients.length} ${clients.length === 1 ? 'client' : 'clients'} · ${openQuotes} open ${openQuotes === 1 ? 'quotation' : 'quotations'}</span>
     </section>
 
-    ${staleBackup ? `
+    ${!bk.ready && hasData ? `
       <button class="notice" data-goto-settings>
-        ${icon('backup')}<span><strong>Back up your data</strong><small>Last backup: ${cache.lastBackup ? new Date(cache.lastBackup).toLocaleDateString('en-IN') : 'never'}. Tap to back up.</small></span>
+        ${icon('backup')}<span><strong>Set up Google Drive backup</strong><small>Your data is only on this phone. Takes about 5 minutes, once.</small></span>
+      </button>` : ''}
+    ${bk.ready && cache.backupDue ? `
+      <button class="notice" data-backup-now>
+        ${icon('backup')}<span><strong>Backup due · tap to back up</strong><small>Saves an encrypted copy to Google Drive (${esc(bk.prefs.email)}).${bk.last ? ' Last: ' + esc(new Date(bk.last).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })) + '.' : ''}</small></span>
       </button>` : ''}
     ${!p.upi ? `
       <button class="notice notice-soft" data-goto-profile>
@@ -169,6 +176,13 @@ function renderHome() {
   view.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => ctx.go('doc', b.dataset.inv)));
   const gs = view.querySelector('[data-goto-settings]');
   if (gs) gs.onclick = () => setTab('settings');
+  const bn = view.querySelector('[data-backup-now]');
+  if (bn) bn.onclick = async () => {
+    bn.disabled = true; bn.querySelector('strong').textContent = 'Backing up…';
+    try { await backupToDrive({ interactive: true }); toast('Backed up to Google Drive'); }
+    catch (err) { toast(backupError(err)); }
+    await ctx.reload();
+  };
   const gp = view.querySelector('[data-goto-profile]');
   if (gp) gp.onclick = () => ctx.go('profile');
 }
@@ -191,7 +205,13 @@ async function render() {
     'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
-  else if (state.tab === 'home') renderHome();
+  else if (state.tab === 'home') {
+    // always show the current backup state on Home, and let auto-backup check if one is due
+    [cache.backup, cache.backupDue] = await Promise.all([backupStatus(), backupIsDue()]);
+    if (seq !== renderSeq) return;
+    renderHome();
+    if (cache.backup.ready && cache.backupDue) autoBackup();
+  }
   else if (state.tab === 'clients') renderClientList(ctx, view);
   else if (state.tab === 'documents') renderDocuments(ctx, view);
   else if (state.tab === 'money') renderMoney(ctx, view);
@@ -282,6 +302,8 @@ async function lock() {
   locking = false;
   await load();
   render();
+  startAutoBackup();
+  warmUp();
 }
 
 async function start() {
@@ -289,6 +311,8 @@ async function start() {
     markActive();
     await load();
     render();
+    startAutoBackup();
+    warmUp();
   } else {
     lock();
   }
@@ -300,6 +324,11 @@ document.addEventListener('visibilitychange', () => {
   else markActive();
 });
 window.addEventListener('pagehide', markActive);
+
+/* ---------- backup events: refresh Home when a backup finishes or becomes due ---------- */
+const refreshHome = async () => { if (state.tab === 'home' && !state.sub && !locking) { await load(); render(); } };
+window.addEventListener('aurdesk:backup', () => { toast('Backed up to Google Drive'); refreshHome(); });
+window.addEventListener('aurdesk:backup-due', refreshHome);
 
 /* ---------- start ---------- */
 // Offline support + updates: when a new version takes over, reload once so it shows straight away.

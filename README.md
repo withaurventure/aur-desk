@@ -18,9 +18,13 @@ No app store, no build tools.
   to where you came from
 - Calculator: price check from the rate card (with your hourly floor), profit plan against this
   month's Money entries, printing size calculator; price check and printing turn into a quotation in one tap
+- Backup to Google Drive: encrypted on the phone with your backup password (AES-256-GCM), uploaded
+  to an "AUR Desk Backups" folder (app can only see its own files), newest 10 kept, one-tap or
+  automatic (after every change, hourly, daily, every 2 days, weekly, monthly), restore from Drive
 
-Clients, prices and payment details are stored only on the phone (IndexedDB). They are never
-part of this repository. The rate card is imported from a private file that is not kept here.
+Clients, prices and payment details are stored only on the phone (IndexedDB), plus encrypted
+backups in your own Google Drive. They are never part of this repository. The Google Client ID is
+pasted into the app's Settings, not stored here. The rate card is imported from a private file that is not kept here.
 
 ## Put it online (GitHub Pages, free)
 1. On github.com (account withaurventure), create a new repository named `aur-desk`. Public is fine:
@@ -55,6 +59,7 @@ Upload the changed files to the same repository, and change `VERSION` in `sw.js`
 - `js/pdf.js`: PDF layout (quotations, invoices, receipts, UPI QR) and sharing
 - `js/money.js`: Money tab and the money in / out form
 - `js/calc.js`: Calculator (price check, profit, printing size)
+- `js/backup.js`: encrypted backups, Google Drive upload/restore and auto-backup
 - `vendor/qrcode.js`: QR code generator (MIT licence, see `vendor/qrcode-LICENSE.txt`)
 - `vendor/jspdf.umd.min.js`: PDF engine (jsPDF, MIT licence, see `vendor/jspdf-LICENSE.txt`)
 - `fonts/`: Montserrat for PDFs, includes the ₹ sign (SIL Open Font Licence, see `fonts/OFL.txt`)

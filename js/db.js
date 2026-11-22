@@ -33,14 +33,18 @@ async function run(store, mode, fn) {
   });
 }
 
+// Tell the auto-backup when your business data changes (not for app housekeeping).
+const TRACKED_KV = ['profiles', 'owner', 'counters', 'profitPlan'];
+const changed = (r) => { window.dispatchEvent(new CustomEvent('aurdesk:changed')); return r; };
+
 export const db = {
   all: (store) => run(store, 'readonly', (s) => s.getAll()),
   get: (store, id) => run(store, 'readonly', (s) => s.get(id)),
-  put: (store, value) => run(store, 'readwrite', (s) => s.put(value)),
-  del: (store, id) => run(store, 'readwrite', (s) => s.delete(id)),
-  clear: (store) => run(store, 'readwrite', (s) => s.clear()),
+  put: (store, value) => run(store, 'readwrite', (s) => s.put(value)).then(changed),
+  del: (store, id) => run(store, 'readwrite', (s) => s.delete(id)).then(changed),
+  clear: (store) => run(store, 'readwrite', (s) => s.clear()).then(changed),
   getKV: (key) => run('kv', 'readonly', (s) => s.get(key)),
-  setKV: (key, value) => run('kv', 'readwrite', (s) => s.put(value, key)),
+  setKV: (key, value) => run('kv', 'readwrite', (s) => s.put(value, key)).then((r) => (TRACKED_KV.includes(key) ? changed(r) : r)),
 
   // Erase everything (used by "Forgot PIN").
   async wipe() {
