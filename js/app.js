@@ -5,6 +5,7 @@ import { esc, inr, icon, toast } from './ui.js';
 import { hasPin, runLock } from './lock.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
 import { renderSettings, renderProfile, renderRateForm } from './settings.js';
+import { renderDocuments, renderEditor, renderDoc } from './quote.js';
 
 const STORE_KEY = 'aurdesk.company';
 const AUTO_LOCK_MS = 60 * 1000;
@@ -17,13 +18,14 @@ const state = {
   tab: 'home',
   sub: null,   // a screen opened on top of a tab (form, detail)
   id: null,
+  preset: null, // client chosen before opening a new quotation
 };
-const cache = { clients: [], rates: [], profiles: {}, owner: 'Shashank', lastBackup: null };
+const cache = { clients: [], rates: [], docs: [], profiles: {}, owner: 'Shashank', lastBackup: null };
 
 /* ---------- data ---------- */
 async function load() {
-  [cache.clients, cache.rates, cache.profiles, cache.owner, cache.lastBackup] = await Promise.all([
-    db.all('clients'), db.all('rates'), db.getKV('profiles'), db.getKV('owner'), db.getKV('lastBackup'),
+  [cache.clients, cache.rates, cache.docs, cache.profiles, cache.owner, cache.lastBackup] = await Promise.all([
+    db.all('clients'), db.all('rates'), db.all('docs'), db.getKV('profiles'), db.getKV('owner'), db.getKV('lastBackup'),
   ]);
   cache.profiles ||= {};
   cache.owner ||= 'Shashank';
@@ -47,6 +49,7 @@ const ctx = {
   back() { history.back(); },
   async reload(andRender = true) { await load(); if (andRender) render(); },
   render: () => render(),
+  setTab: (tab) => setTab(tab),
   lockNow: () => lock(),
 };
 
@@ -74,6 +77,7 @@ function renderHome() {
   const pct = received + due ? Math.round((received / (received + due)) * 100) : 0;
   const clients = cache.clients.filter((x) => x.company === state.company);
   const onboarding = clients.filter((x) => (x.checklist || []).some((i) => !i.done));
+  const openQuotes = cache.docs.filter((d) => d.company === state.company && d.kind === 'quote' && ['draft', 'sent', 'accepted'].includes(d.status)).length;
   const hasData = cache.clients.length || cache.rates.length;
   const staleBackup = hasData && (!cache.lastBackup || Date.now() - new Date(cache.lastBackup) > 7 * 864e5);
   const p = ctx.profile();
@@ -95,7 +99,7 @@ function renderHome() {
         <div><small>Still due</small><strong>${inr(due)}</strong></div>
       </div>
       <div class="track"><div style="width:${pct}%"></div></div>
-      <span class="label">${clients.length} ${clients.length === 1 ? 'client' : 'clients'} · ${onboarding.length} still onboarding</span>
+      <span class="label">${clients.length} ${clients.length === 1 ? 'client' : 'clients'} · ${openQuotes} open ${openQuotes === 1 ? 'quotation' : 'quotations'}</span>
     </section>
 
     ${staleBackup ? `
@@ -108,7 +112,7 @@ function renderHome() {
       </button>` : ''}
 
     <div class="actions">
-      <button class="action primary" data-soon="New quotation">${icon('plus')}New quotation</button>
+      <button class="action primary" data-new-quote>${icon('plus')}New quotation</button>
       <button class="action" data-onboard>${icon('client')}Onboard client</button>
       <button class="action" data-soon="Recording payments">${icon('card')}Record payment</button>
       <button class="action" data-soon="The calculator">${icon('calc')}Quick calculator</button>
@@ -128,18 +132,13 @@ function renderHome() {
 
   view.querySelector('#open-switcher').onclick = openSwitcher;
   view.querySelector('[data-onboard]').onclick = () => { setTab('clients'); ctx.go('client-form'); };
+  view.querySelector('[data-new-quote]').onclick = () => { state.preset = null; setTab('documents'); ctx.go('doc-edit'); };
   view.querySelectorAll('[data-client]').forEach((b) => (b.onclick = () => { setTab('clients'); ctx.go('client', b.dataset.client); }));
   view.querySelectorAll('[data-soon]').forEach((b) => (b.onclick = () => toast(b.dataset.soon + ' arrives in the next steps')));
   const gs = view.querySelector('[data-goto-settings]');
   if (gs) gs.onclick = () => setTab('settings');
   const gp = view.querySelector('[data-goto-profile]');
   if (gp) gp.onclick = () => { setTab('settings'); ctx.go('profile'); };
-}
-
-function renderDocuments() {
-  view.innerHTML = `
-    <h1 class="page-title">Documents</h1>
-    <div class="empty">Quotations arrive in step 3, invoices and receipts in step 4.</div>`;
 }
 
 /* ---------- router ---------- */
@@ -157,11 +156,12 @@ async function render() {
   const screens = {
     'client-form': renderClientForm, client: renderClient,
     profile: renderProfile, rate: renderRateForm,
+    'doc-edit': renderEditor, doc: renderDoc,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
   else if (state.tab === 'home') renderHome();
   else if (state.tab === 'clients') renderClientList(ctx, view);
-  else if (state.tab === 'documents') renderDocuments();
+  else if (state.tab === 'documents') renderDocuments(ctx, view);
   else if (state.tab === 'settings') await renderSettings(ctx, view);
   if (seq !== renderSeq) return;
 

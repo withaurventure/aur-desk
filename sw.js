@@ -1,6 +1,6 @@
 // AUR Desk — service worker: lets the app open with no internet.
 // Bump VERSION whenever you upload new files, so the phone picks them up.
-const VERSION = 'aur-desk-v3';
+const VERSION = 'aur-desk-v4';
 const FILES = [
   './',
   'index.html',
@@ -12,6 +12,13 @@ const FILES = [
   'js/lock.js',
   'js/clients.js',
   'js/settings.js',
+  'js/docs.js',
+  'js/quote.js',
+  'js/pdf.js',
+  'vendor/jspdf.umd.min.js',
+  'fonts/Montserrat-Regular.ttf',
+  'fonts/Montserrat-SemiBold.ttf',
+  'fonts/Montserrat-Bold.ttf',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

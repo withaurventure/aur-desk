@@ -8,6 +8,7 @@ export const COMPANIES = {
     name: 'AUR Ventures',
     short: 'Ventures',
     prefix: 'AURV',
+    tagline: 'Building businesses. Creating impact.',
     logo: 'logos/aur-ventures.jpg',
     theme: {
       primary: '#0A1433',      // buttons, active tab
@@ -27,6 +28,7 @@ export const COMPANIES = {
     name: 'AUR Studio',
     short: 'Studio',
     prefix: 'AURS',
+    tagline: 'Building Trust in a Trustless World',
     logo: 'logos/aur-studio.png',
     theme: {
       primary: '#303090',
@@ -46,6 +48,7 @@ export const COMPANIES = {
     name: 'AUR Printing Studio',
     short: 'Printing',
     prefix: 'AURP',
+    tagline: '',
     logo: 'logos/aur-printing-studio.png',
     theme: {
       primary: '#2F4A9A',
@@ -68,10 +71,23 @@ export const COMPANY_ORDER = ['studio', 'printing', 'ventures'];
 // your changes are saved on the phone and override these.
 // Payment details (UPI, PayPal/Wise) are deliberately left empty: you add them in the app.
 const WHATSAPP = '+91 92784 33556';
+const DOC_DEFAULTS = { validityDays: 15, payMode: 'advance', payPct: 50, balanceDays: 7 };
 export const DEFAULT_PROFILES = {
-  ventures: { displayName: 'AUR Ventures', email: 'withaurventure@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '' },
-  studio: { displayName: 'AUR Studio', email: 'withaurstudio@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '' },
-  printing: { displayName: 'AUR Printing Studio', email: '', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '' },
+  ventures: {
+    displayName: 'AUR Ventures', email: 'withaurventure@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '',
+    ...DOC_DEFAULTS,
+    terms: "Either side can end the engagement with 30 days' written notice.",
+  },
+  studio: {
+    displayName: 'AUR Studio', email: 'withaurstudio@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '',
+    ...DOC_DEFAULTS,
+    terms: "2 revision rounds are included per post; extra revisions are billed separately.\nContent is published only after your approval.\nEither side can end a monthly service with 30 days' written notice.",
+  },
+  printing: {
+    displayName: 'AUR Printing Studio', email: '', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '',
+    ...DOC_DEFAULTS,
+    terms: 'Printing starts after the artwork is approved in writing.\nColours may vary slightly between screen and print.\nDelivery dates are counted from artwork approval and advance payment.',
+  },
 };
 
 // Onboarding checklist each new client starts with.

@@ -8,6 +8,9 @@ No app store, no build tools.
 - Step 1: app shell, offline support, home-screen install, company switcher that recolours the app
 - Step 2: PIN + fingerprint lock, client onboarding with checklists, Settings (company details,
   payment details you add yourself, rate card editor and import), backup and restore
+- Step 3: quotations built from the rate card (validity, 50% / 60% / full payment, ad-spend and GST
+  switches, editable terms), branded PDFs shared to WhatsApp or email, approve a quotation to turn it
+  into an editable invoice
 
 Clients, prices and payment details are stored only on the phone (IndexedDB). They are never
 part of this repository. The rate card is imported from a private file that is not kept here.
@@ -40,5 +43,10 @@ Upload the changed files to the same repository, and change `VERSION` in `sw.js`
 - `js/clients.js`: client list, onboarding form and client page
 - `js/settings.js`: company details, rate card, security, backup
 - `js/ui.js`: shared helpers and icons
+- `js/docs.js`: quotation and invoice numbers, totals and terms
+- `js/quote.js`: Documents tab, quotation/invoice editor and document page
+- `js/pdf.js`: PDF layout and sharing
+- `vendor/jspdf.umd.min.js`: PDF engine (jsPDF, MIT licence, see `vendor/jspdf-LICENSE.txt`)
+- `fonts/`: Montserrat for PDFs, includes the ₹ sign (SIL Open Font Licence, see `fonts/OFL.txt`)
 - `sw.js`: offline support
 - `manifest.webmanifest`, `icons/`: install name and app icon

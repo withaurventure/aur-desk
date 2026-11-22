@@ -4,7 +4,7 @@ import { COMPANIES } from './companies.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox, priceLine, BILLING } from './ui.js';
 import { runLock, bioAvailable, bioEnabled, enableBio, disableBio } from './lock.js';
 
-const BACKUP_KEYS = ['profiles', 'owner'];
+const BACKUP_KEYS = ['profiles', 'owner', 'counters'];
 
 /* ---------- main settings page ---------- */
 export async function renderSettings(ctx, view) {
@@ -66,7 +66,7 @@ export async function renderSettings(ctx, view) {
         <button class="btn btn-primary" data-backup>${icon('backup')}Back up now</button>
         <label class="btn btn-ghost file-btn">${icon('restore')}Restore<input type="file" id="restore-file" accept=".txt,.json,application/json,text/plain"></label>
       </div>
-      <p class="hint">Back up saves one file with all three companies' clients, prices and details. Save it to Google Drive. Your PIN is not included.</p>
+      <p class="hint">Back up saves one file with all three companies' clients, quotations, invoices, prices and details. Save it to Google Drive. Your PIN is not included.</p>
     </section>
 
     <section class="section">
@@ -77,7 +77,7 @@ export async function renderSettings(ctx, view) {
       </div>
     </section>
 
-    <p class="version">AUR Desk · step 2 · data stays on this phone</p>
+    <p class="version">AUR Desk · step 3 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
@@ -142,6 +142,29 @@ export function renderProfile(ctx, view) {
       ${field('upi', 'UPI ID', p.upi, 'text', 'Used for the payment QR on invoices, for example name@bank.', 'autocomplete="off" autocapitalize="off" spellcheck="false"')}
       ${field('intlLink', 'International payment link', p.intlLink, 'url', 'PayPal.me or Wise link for clients abroad.', 'inputmode="url" autocapitalize="off"')}
 
+      <h2 class="form-section">Quotation defaults</h2>
+      <p class="hint">New quotations start with these. You can change them on each quotation.</p>
+      <div class="row-2">
+        <div class="field">
+          <label for="p-validityDays">Valid for (days)</label>
+          <input id="p-validityDays" name="validityDays" type="number" inputmode="numeric" min="1" value="${esc(p.validityDays)}">
+        </div>
+        <div class="field">
+          <label for="p-balanceDays">Balance due (days)</label>
+          <input id="p-balanceDays" name="balanceDays" type="number" inputmode="numeric" min="1" value="${esc(p.balanceDays)}">
+        </div>
+      </div>
+      <div class="field">
+        <label for="p-pay">Payment</label>
+        <select id="p-pay" name="pay">
+          ${[['50', '50% advance'], ['60', '60% advance'], ['full', 'Full payment']].map(([v, l]) => `<option value="${v}" ${(p.payMode === 'full' ? 'full' : String(p.payPct)) === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label for="p-terms">Standard terms (one per line)</label>
+        <textarea id="p-terms" name="terms" rows="5">${esc(p.terms)}</textarea>
+      </div>
+
       <h2 class="form-section">Tax</h2>
       ${field('gstin', 'GSTIN', p.gstin, 'text', 'Leave empty until you register. Documents will then show no GST.', 'autocapitalize="characters"')}
 
@@ -153,6 +176,11 @@ export function renderProfile(ctx, view) {
     const f = new FormData(e.target);
     const next = {};
     for (const [k, v] of f.entries()) next[k] = String(v).trim();
+    next.validityDays = Math.max(1, Number(next.validityDays) || 15);
+    next.balanceDays = Math.max(1, Number(next.balanceDays) || 7);
+    next.payMode = next.pay === 'full' ? 'full' : 'advance';
+    next.payPct = next.pay === 'full' ? 50 : Number(next.pay);
+    delete next.pay;
     if (next.upi && !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(next.upi)) {
       toast('That UPI ID does not look right (name@bank)');
       view.querySelector('#p-upi').focus();
@@ -272,6 +300,7 @@ async function backup(ctx) {
     app: 'aur-desk', kind: 'backup', version: 1, exportedAt: new Date().toISOString(),
     clients: await db.all('clients'),
     rates: await db.all('rates'),
+    docs: await db.all('docs'),
     kv: Object.fromEntries(await Promise.all(BACKUP_KEYS.map(async (k) => [k, await db.getKV(k)]))),
   };
   const date = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, phone's own time zone
@@ -301,13 +330,15 @@ async function restore(ctx, input) {
   const when = new Date(data.exportedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
   const ok = await confirmBox({
     title: 'Restore this backup?',
-    text: `From ${when}: ${data.clients.length} clients and ${data.rates.length} prices. Everything currently in AUR Desk will be replaced.`,
+    text: `From ${when}: ${data.clients.length} clients, ${(data.docs || []).length} documents and ${data.rates.length} prices. Everything currently in AUR Desk will be replaced.`,
     ok: 'Replace and restore', danger: true,
   });
   if (!ok) return;
   await db.clear('clients');
   await db.clear('rates');
+  await db.clear('docs');
   for (const c of data.clients) await db.put('clients', c);
+  for (const d of data.docs || []) await db.put('docs', d);
   for (const r of data.rates) await db.put('rates', r);
   for (const k of BACKUP_KEYS) if (data.kv && k in data.kv) await db.setKV(k, data.kv[k]);
   await ctx.reload();

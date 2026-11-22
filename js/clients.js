@@ -2,6 +2,7 @@
 import { db } from './db.js';
 import { CHECKLISTS } from './companies.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox, waLink, MARKETS } from './ui.js';
+import { docRow, bindDocRows } from './quote.js';
 
 const NICHES = ['Medical / clinic', 'Web3 / crypto', 'Retail / shop', 'Education', 'Restaurant / food', 'Real estate', 'Other'];
 
@@ -165,6 +166,7 @@ export function renderClient(ctx, view) {
   if (!x) { view.innerHTML = `${pageHeader('Client')}<div class="empty">This client no longer exists.</div>`; return; }
   const list = x.checklist || [];
   const done = list.filter((i) => i.done).length;
+  const docs = ctx.cache.docs.filter((d) => d.clientId === x.id).sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
 
   view.innerHTML = `
     ${pageHeader(x.name, [x.contact, x.city].filter(Boolean).join(' · '),
@@ -197,14 +199,16 @@ export function renderClient(ctx, view) {
     ${x.notes ? `<section class="section"><div class="section-head"><h2>Notes</h2></div><div class="card notes">${esc(x.notes)}</div></section>` : ''}
 
     <section class="section">
-      <div class="section-head"><h2>Quotations &amp; invoices</h2></div>
-      <div class="empty">Quotations for this client arrive in step 3.</div>
+      <div class="section-head"><h2>Quotations &amp; invoices</h2><button class="btn btn-ghost btn-sm" data-quote>${icon('plus')}Quotation</button></div>
+      ${docs.length ? `<div class="list">${docs.map(docRow).join('')}</div>` : '<div class="empty">Nothing sent to this client yet.</div>'}
     </section>
 
     <button class="btn btn-danger-ghost btn-block" data-delete>Delete client</button>
   `;
 
   view.querySelector('[data-edit]').onclick = () => ctx.go('client-form', x.id);
+  view.querySelector('[data-quote]').onclick = () => { ctx.state.preset = x.id; ctx.go('doc-edit'); };
+  bindDocRows(ctx, view);
   view.querySelectorAll('[data-check]').forEach((box) => {
     box.onchange = async () => {
       x.checklist[Number(box.dataset.check)].done = box.checked;
