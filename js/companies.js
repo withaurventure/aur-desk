@@ -63,3 +63,20 @@ export const COMPANIES = {
 };
 
 export const COMPANY_ORDER = ['studio', 'printing', 'ventures'];
+
+// Starting contact details. Everything here can be changed in Settings;
+// your changes are saved on the phone and override these.
+// Payment details (UPI, PayPal/Wise) are deliberately left empty: you add them in the app.
+const WHATSAPP = '+91 92784 33556';
+export const DEFAULT_PROFILES = {
+  ventures: { displayName: 'AUR Ventures', email: 'withaurventure@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '' },
+  studio: { displayName: 'AUR Studio', email: 'withaurstudio@gmail.com', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '' },
+  printing: { displayName: 'AUR Printing Studio', email: '', whatsapp: WHATSAPP, address: '', upi: '', intlLink: '', gstin: '' },
+};
+
+// Onboarding checklist each new client starts with.
+export const CHECKLISTS = {
+  ventures: ['Kick-off call done', 'Agreement / quotation accepted', 'Advance payment received'],
+  studio: ['Kick-off call done', 'Brand assets received (logo, colours, photos)', 'Account access shared', 'Quotation accepted', 'Advance payment received'],
+  printing: ['Design / artwork received', 'Size and quantity confirmed', 'Advance payment received', 'Delivery date agreed'],
+};

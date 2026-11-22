@@ -1,12 +1,17 @@
 // AUR Desk — service worker: lets the app open with no internet.
 // Bump VERSION whenever you upload new files, so the phone picks them up.
-const VERSION = 'aur-desk-v1';
+const VERSION = 'aur-desk-v2';
 const FILES = [
   './',
   'index.html',
   'css/app.css',
   'js/app.js',
   'js/companies.js',
+  'js/db.js',
+  'js/ui.js',
+  'js/lock.js',
+  'js/clients.js',
+  'js/settings.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
