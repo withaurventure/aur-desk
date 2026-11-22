@@ -77,7 +77,8 @@ export async function renderSettings(ctx, view) {
       </div>
     </section>
 
-    <p class="version">AUR Desk · step 4 · data stays on this phone</p>
+    <button class="btn btn-ghost btn-block" data-update>Check for updates</button>
+    <p class="version">AUR Desk · step 5.1 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
@@ -92,6 +93,16 @@ export async function renderSettings(ctx, view) {
     ctx.render();
   };
   view.querySelector('[data-lock-now]').onclick = () => ctx.lockNow();
+  view.querySelector('[data-update]').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update();
+      toast('Up to date. Reloading…');
+      setTimeout(() => location.reload(), 600);
+    } catch { toast('Could not check. Are you online?'); btn.disabled = false; btn.textContent = 'Check for updates'; }
+  };
   const bio = view.querySelector('#bio-toggle');
   if (bio) {
     bio.onchange = async () => {

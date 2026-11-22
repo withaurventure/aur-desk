@@ -1,6 +1,6 @@
 // AUR Desk — service worker: lets the app open with no internet.
-// Bump VERSION whenever you upload new files, so the phone picks them up.
-const VERSION = 'aur-desk-v7';
+// Bump VERSION whenever you upload new files. Updates show on the next open (or right away while open).
+const VERSION = 'aur-desk-v8';
 const FILES = [
   './',
   'index.html',
@@ -32,8 +32,13 @@ const FILES = [
   'logos/aur-printing-studio.png',
 ];
 
+// Install: download every file fresh (skip the browser's own cache) so an update is never half old.
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(VERSION)
+      .then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (e) => {
@@ -44,20 +49,34 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// App files: cache first. Fonts: cache after first load. Everything else: network.
+// App files: try the internet first (so updates appear at once), fall back to the saved copy offline.
+// Fonts: saved copy first. Everything else: untouched.
 self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== 'GET') return;
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
   const isFont = url.hostname.includes('fonts.googleapis.com') || url.hostname.includes('fonts.gstatic.com');
-  if (url.origin === location.origin || isFont) {
-    e.respondWith(
-      caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
-        if (res.ok || res.type === 'opaque') {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      }))
-    );
+
+  if (isFont) {
+    e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok || res.type === 'opaque') { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(req, copy)); }
+      return res;
+    })));
+    return;
   }
+  if (url.origin !== location.origin) return;
+
+  e.respondWith((async () => {
+    const cache = await caches.open(VERSION);
+    try {
+      const res = await Promise.race([
+        fetch(req, { cache: 'no-cache' }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 4000)),
+      ]);
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    } catch {
+      return (await cache.match(req, { ignoreSearch: true })) || (await cache.match('index.html')) || Response.error();
+    }
+  })());
 });

@@ -302,8 +302,17 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', markActive);
 
 /* ---------- start ---------- */
+// Offline support + updates: when a new version takes over, reload once so it shows straight away.
+const APP_VERSION = 'step 5.1'; // shown in Settings
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return; // first install: nothing to refresh
+    reloaded = true;
+    location.reload();
+  });
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }));
 }
 history.replaceState({ tab: 'home' }, '');
 applyTheme();
