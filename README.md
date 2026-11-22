@@ -14,6 +14,10 @@ No app store, no build tools.
 - Step 4: Money tab to record money in and out by hand (who, which account, method, reference,
   what for), payments linked to invoices update them to Part paid / Paid, receipts as PDFs,
   UPI QR on invoices once a UPI ID is added, real Received / Still due figures on Home
+- Swipe a document right to send, left to edit or delete (always asks first); Back always returns
+  to where you came from
+- Calculator: price check from the rate card (with your hourly floor), profit plan against this
+  month's Money entries, printing size calculator; price check and printing turn into a quotation in one tap
 
 Clients, prices and payment details are stored only on the phone (IndexedDB). They are never
 part of this repository. The rate card is imported from a private file that is not kept here.
@@ -50,6 +54,7 @@ Upload the changed files to the same repository, and change `VERSION` in `sw.js`
 - `js/quote.js`: Documents tab, quotation/invoice editor and document page
 - `js/pdf.js`: PDF layout (quotations, invoices, receipts, UPI QR) and sharing
 - `js/money.js`: Money tab and the money in / out form
+- `js/calc.js`: Calculator (price check, profit, printing size)
 - `vendor/qrcode.js`: QR code generator (MIT licence, see `vendor/qrcode-LICENSE.txt`)
 - `vendor/jspdf.umd.min.js`: PDF engine (jsPDF, MIT licence, see `vendor/jspdf-LICENSE.txt`)
 - `fonts/`: Montserrat for PDFs, includes the ₹ sign (SIL Open Font Licence, see `fonts/OFL.txt`)

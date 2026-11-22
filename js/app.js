@@ -7,6 +7,7 @@ import { renderClientList, renderClientForm, renderClient } from './clients.js';
 import { renderSettings, renderProfile, renderRateForm } from './settings.js';
 import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.js';
 import { renderMoney, renderTxnForm } from './money.js';
+import { renderCalc } from './calc.js';
 import { invoiceState, money, fmtDate, addDays } from './docs.js';
 
 const STORE_KEY = 'aurdesk.company';
@@ -21,6 +22,7 @@ const state = {
   sub: null,   // a screen opened on top of a tab (form, detail)
   id: null,
   preset: null, // client chosen before opening a new quotation
+  presetDraft: null, // items carried over from the Calculator
 };
 const cache = { clients: [], rates: [], docs: [], txns: [], profiles: {}, owner: 'Shashank', lastBackup: null };
 
@@ -54,6 +56,7 @@ const ctx = {
   async reload(andRender = true) { await load(); if (andRender) render(); },
   render: () => render(),
   setTab: (tab) => setTab(tab),
+  switchCompany(id) { state.company = id; localStorage.setItem(STORE_KEY, id); applyTheme(); },
   lockNow: () => lock(),
 };
 
@@ -129,7 +132,7 @@ function renderHome() {
       <button class="action primary" data-new-quote>${icon('plus')}New quotation</button>
       <button class="action" data-onboard>${icon('client')}Onboard client</button>
       <button class="action" data-record>${icon('card')}Record payment</button>
-      <button class="action" data-money>${icon('wallet')}Money in &amp; out</button>
+      <button class="action" data-calc>${icon('calc')}Calculator</button>
     </div>
 
     <section class="section">
@@ -162,7 +165,7 @@ function renderHome() {
   view.querySelector('[data-new-quote]').onclick = () => { state.preset = null; ctx.go('doc-edit'); };
   view.querySelectorAll('[data-client]').forEach((b) => (b.onclick = () => ctx.go('client', b.dataset.client)));
   view.querySelector('[data-record]').onclick = () => { state.preset = { type: 'in' }; ctx.go('txn'); };
-  view.querySelector('[data-money]').onclick = () => setTab('money');
+  view.querySelector('[data-calc]').onclick = () => ctx.go('calc');
   view.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => ctx.go('doc', b.dataset.inv)));
   const gs = view.querySelector('[data-goto-settings]');
   if (gs) gs.onclick = () => setTab('settings');
@@ -185,7 +188,7 @@ async function render() {
   const screens = {
     'client-form': renderClientForm, client: renderClient,
     profile: renderProfile, rate: renderRateForm,
-    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm,
+    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
   else if (state.tab === 'home') renderHome();

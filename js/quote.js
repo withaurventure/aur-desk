@@ -78,6 +78,15 @@ export async function renderEditor(ctx, view) {
     else {
       const client = ctx.state.preset ? ctx.cache.clients.find((c) => c.id === ctx.state.preset) : null;
       draft = await newQuote(ctx.state.company, ctx.profile(), client);
+      if (ctx.state.presetDraft) {                       // started from the Calculator
+        const pd = ctx.state.presetDraft;
+        ctx.state.presetDraft = null;
+        Object.assign(draft, {
+          market: pd.market, currency: pd.currency, lines: pd.lines, discountPct: pd.discountPct || 0,
+          ...(pd.payment ? { payment: pd.payment } : {}), ...(pd.addGst ? { addGst: true } : {}),
+        });
+        dirty = true;
+      }
     }
     draftFor = key;
     dirty = false;
