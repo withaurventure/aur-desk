@@ -27,6 +27,11 @@ export const ICONS = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  minus: '<path d="M5 12h14"/>',
+  arrowIn: '<path d="M17 7L7 17M7 9v8h8"/>',
+  arrowOut: '<path d="M7 17L17 7M9 7h8v8"/>',
+  wallet: '<path d="M20 7H5a2 2 0 0 1 0-4h13v4"/><path d="M3 5v14a2 2 0 0 0 2 2h15V7"/><path d="M16 14h.01"/>',
+  receipt: '<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
   send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',
 };
 export const icon = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;

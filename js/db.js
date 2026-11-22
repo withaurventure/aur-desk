@@ -1,7 +1,7 @@
 // AUR Desk — on-phone database (IndexedDB). Nothing here ever leaves the phone
 // unless you make a backup yourself.
 const DB_NAME = 'aur-desk';
-const DB_VERSION = 2; // v2 adds quotations and invoices ('docs')
+const DB_VERSION = 3; // v2 adds quotations and invoices ('docs'), v3 adds money in/out ('txns')
 let dbPromise;
 
 function open() {
@@ -10,7 +10,7 @@ function open() {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const d = req.result;
-        for (const store of ['clients', 'rates', 'docs']) {
+        for (const store of ['clients', 'rates', 'docs', 'txns']) {
           if (!d.objectStoreNames.contains(store)) d.createObjectStore(store, { keyPath: 'id' });
         }
         if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv');

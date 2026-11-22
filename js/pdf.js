@@ -8,14 +8,13 @@ let libPromise;
 function loadLib() {
   if (!libPromise) {
     libPromise = (async () => {
-      if (!window.jspdf) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'vendor/jspdf.umd.min.js';
-          s.onload = resolve; s.onerror = () => reject(new Error('PDF engine failed to load'));
-          document.head.appendChild(s);
-        });
-      }
+      const load = (src) => new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = resolve; s.onerror = () => reject(new Error(src + ' failed to load'));
+        document.head.appendChild(s);
+      });
+      if (!window.jspdf) await load('vendor/jspdf.umd.min.js');
+      if (!window.qrcode) await load('vendor/qrcode.js');
       const fonts = {};
       for (const w of ['Regular', 'SemiBold', 'Bold']) fonts[w] = await fileToBase64(`fonts/Montserrat-${w}.ttf`);
       return { jsPDF: window.jspdf.jsPDF, fonts };
@@ -42,31 +41,27 @@ async function loadImage(url) {
 
 const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 
-/* ---------- build the PDF ---------- */
-export async function buildPdf(doc, profile) {
+/* ---------- shared page setup + header ---------- */
+async function setup(company) {
   const { jsPDF, fonts } = await loadLib();
-  const co = COMPANIES[doc.company];
-  const theme = co.theme;
+  const co = COMPANIES[company];
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
   for (const [w, data] of Object.entries(fonts)) {
     pdf.addFileToVFS(`M-${w}.ttf`, data);
     pdf.addFont(`M-${w}.ttf`, 'M', w.toLowerCase());
   }
   const font = (w, size, color = [10, 20, 51]) => { pdf.setFont('M', w); pdf.setFontSize(size); pdf.setTextColor(...color); };
-  const SLATE = [74, 85, 115];
-  const NAVY = [10, 20, 51];
-  const ACCENT = rgb(theme.primary);
-  const SOFT = rgb(theme.soft);
-  const W = 210, L = 16, R = 194;
-  const cur = doc.currency;
-  const m = (n) => money(n, cur);
-  const t = totals(doc);
-  const isQuote = doc.kind === 'quote';
+  return {
+    pdf, co, font,
+    SLATE: [74, 85, 115], NAVY: [10, 20, 51], GREEN: [31, 122, 82],
+    ACCENT: rgb(co.theme.primary), SOFT: rgb(co.theme.soft),
+    W: 210, L: 16, R: 194,
+  };
+}
 
-  // accent bar
+async function drawHeader(k, profile, title, rightLines) {
+  const { pdf, co, font, SLATE, ACCENT, W, L, R } = k;
   pdf.setFillColor(...ACCENT); pdf.rect(0, 0, W, 4, 'F');
-
-  // logo + company block
   let x0 = L;
   try {
     const logo = await loadImage(co.logo);
@@ -82,16 +77,56 @@ export async function buildPdf(doc, profile) {
   if (profile.address) pdf.text(pdf.splitTextToSize(profile.address.replace(/\n/g, ', '), 90)[0], x0, 30);
   if (profile.gstin) pdf.text('GSTIN ' + profile.gstin, x0, profile.address ? 35 : 30);
 
-  // title block (right)
-  font('bold', 20, ACCENT); pdf.text(isQuote ? 'QUOTATION' : 'INVOICE', R, 20, { align: 'right' });
-  font('semibold', 10); pdf.text(doc.number || '', R, 26.5, { align: 'right' });
+  font('bold', 20, ACCENT); pdf.text(title, R, 20, { align: 'right' });
+  font('semibold', 10); pdf.text(rightLines[0] || '', R, 26.5, { align: 'right' });
   font('regular', 8.5, SLATE);
-  pdf.text('Date: ' + fmtDate(doc.date), R, 31.5, { align: 'right' });
-  pdf.text(isQuote
-    ? 'Valid until: ' + fmtDate(addDays(doc.date, doc.validityDays))
-    : (doc.payment.mode === 'full' ? 'Due: ' : 'Balance due: ') + fmtDate(addDays(doc.date, doc.payment.balanceDays)), R, 36, { align: 'right' });
-
+  rightLines.slice(1).forEach((line, i) => pdf.text(line, R, 31.5 + i * 4.5, { align: 'right' }));
   pdf.setDrawColor(227, 230, 238); pdf.setLineWidth(0.3); pdf.line(L, 42, R, 42);
+}
+
+function drawFooter(k) {
+  const { pdf, co, font, SLATE, W, R } = k;
+  const pages = pdf.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    pdf.setPage(i);
+    font('regular', 7.5, SLATE);
+    if (co.tagline) pdf.text(co.tagline, W / 2, 287, { align: 'center' });
+    if (pages > 1) pdf.text(`${i} / ${pages}`, R, 287, { align: 'right' });
+  }
+}
+
+// UPI payment QR (any UPI app can scan it). Amount and note are filled in.
+function drawUpiQr(k, x, y, size, upi, name, amount, note) {
+  const { pdf } = k;
+  const url = `upi://pay?pa=${encodeURIComponent(upi)}&pn=${encodeURIComponent(name)}&am=${Math.round(amount)}&cu=INR&tn=${encodeURIComponent(note)}`;
+  const qr = window.qrcode(0, 'M');
+  qr.addData(url); qr.make();
+  const n = qr.getModuleCount();
+  const cell = size / n;
+  pdf.setFillColor(255, 255, 255); pdf.rect(x - 2, y - 2, size + 4, size + 4, 'F');
+  pdf.setFillColor(10, 20, 51);
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) pdf.rect(x + c * cell, y + r * cell, cell + 0.02, cell + 0.02, 'F');
+}
+
+const fileNameFor = (number, name) => `${number || 'draft'} ${name || ''}`.trim().replace(/[^\w\- ]+/g, '').replace(/\s+/g, '-') + '.pdf';
+
+/* ---------- quotation / invoice ----------
+   pay (invoices only): { paid, balance, dueNow } from what you've recorded in Money */
+export async function buildPdf(doc, profile, pay = null) {
+  const k = await setup(doc.company);
+  const { pdf, co, font, SLATE, NAVY, GREEN, ACCENT, SOFT, W, L, R } = k;
+  const cur = doc.currency;
+  const m = (n) => money(n, cur);
+  const t = totals(doc);
+  const isQuote = doc.kind === 'quote';
+  const paidSoFar = !isQuote && pay && pay.paid > 0;
+
+  await drawHeader(k, profile, isQuote ? 'QUOTATION' : 'INVOICE', [
+    doc.number || '',
+    'Date: ' + fmtDate(doc.date),
+    isQuote ? 'Valid until: ' + fmtDate(addDays(doc.date, doc.validityDays))
+      : (doc.payment.mode === 'full' ? 'Due: ' : 'Balance due: ') + fmtDate(addDays(doc.date, doc.payment.balanceDays)),
+  ]);
 
   // bill to + amount box
   const c = doc.client || {};
@@ -103,10 +138,11 @@ export async function buildPdf(doc, profile) {
     pdf.text(line, L, cy); cy += 4.6;
   }
   pdf.setFillColor(...SOFT); pdf.roundedRect(128, 47, R - 128, 26, 3, 3, 'F');
-  font('semibold', 7.5, SLATE); pdf.text(isQuote ? 'TOTAL' : 'AMOUNT DUE', 133, 54);
-  font('bold', 17, ACCENT); pdf.text(m(t.total), 133, 62.5);
+  font('semibold', 7.5, SLATE); pdf.text(isQuote ? 'TOTAL' : paidSoFar ? (pay.balance > 0 ? 'BALANCE DUE' : 'PAID IN FULL') : 'AMOUNT DUE', 133, 54);
+  font('bold', 17, paidSoFar && pay.balance <= 0 ? GREEN : ACCENT); pdf.text(m(paidSoFar ? pay.balance : t.total), 133, 62.5);
   font('regular', 8, SLATE);
-  pdf.text(doc.payment.mode === 'full' ? 'Full payment' : `${doc.payment.pct}% advance: ${m(t.advance)}`, 133, 68.5);
+  pdf.text(paidSoFar ? `Paid so far: ${m(pay.paid)} of ${m(t.total)}`
+    : doc.payment.mode === 'full' ? 'Full payment' : `${doc.payment.pct}% advance: ${m(t.advance)}`, 133, 68.5);
 
   // items table
   let y = Math.max(cy + 4, 82);
@@ -151,6 +187,7 @@ export async function buildPdf(doc, profile) {
   if (t.gst) rows.push(['GST (18%)', m(t.gst)]);
   newPageIfNeeded(14 + rows.length * 6 + (t.recurring ? 6 : 0) + 14);
   y += 2;
+  const totalsTop = y;
   for (const [k, v] of rows) {
     font('regular', 9, SLATE); pdf.text(k, 150, y, { align: 'right' });
     font('regular', 9); pdf.text(v, COL.amount, y, { align: 'right' });
@@ -165,11 +202,35 @@ export async function buildPdf(doc, profile) {
     font('regular', 8.5, SLATE); pdf.text('Then each month', 150, y, { align: 'right' });
     pdf.text(m(t.recurring), COL.amount, y, { align: 'right' }); y += 5.5;
   }
-  if (doc.payment.mode !== 'full') {
+  if (doc.payment.mode !== 'full' && !paidSoFar) {
     font('semibold', 9); pdf.text(`Advance (${doc.payment.pct}%)`, 150, y, { align: 'right' });
     pdf.text(m(t.advance), COL.amount, y, { align: 'right' }); y += 5.5;
     font('regular', 9, SLATE); pdf.text('Balance', 150, y, { align: 'right' });
     pdf.text(m(t.balance), COL.amount, y, { align: 'right' }); y += 5.5;
+  }
+  if (paidSoFar) {
+    font('semibold', 9, GREEN); pdf.text('Paid so far', 150, y, { align: 'right' });
+    pdf.text('− ' + m(pay.paid), COL.amount, y, { align: 'right' }); y += 5.5;
+    font('bold', 10); pdf.text(pay.balance > 0 ? 'Balance due' : 'Paid in full', 150, y, { align: 'right' });
+    pdf.text(m(pay.balance), COL.amount, y, { align: 'right' }); y += 5.5;
+  }
+
+  // how to pay: sits in the empty space left of the totals
+  const payLines = [];
+  if (profile.upi && cur === 'INR') payLines.push('UPI: ' + profile.upi);
+  if (profile.intlLink && cur === 'USD') payLines.push('Pay online: ' + profile.intlLink);
+  const qrAmount = !isQuote && cur === 'INR' && profile.upi ? (pay ? pay.dueNow : (doc.payment.mode === 'full' ? t.total : t.advance)) : 0;
+  if (payLines.length) {
+    let py = totalsTop;
+    font('semibold', 8, SLATE); pdf.text('HOW TO PAY', L, py); py += 5.5;
+    font('regular', 9); payLines.forEach((p) => { pdf.text(pdf.splitTextToSize(p, 95)[0], L, py); py += 4.8; });
+    if (qrAmount > 0) {
+      drawUpiQr(k, L, py + 1, 28, profile.upi, profile.displayName, qrAmount, doc.number || '');
+      font('semibold', 9); pdf.text(`Scan to pay ${m(qrAmount)}`, L + 33, py + 10);
+      font('regular', 7.5, SLATE); pdf.text(pdf.splitTextToSize('Any UPI app: GPay, PhonePe, Paytm, BHIM', 60), L + 33, py + 15);
+      py += 33;
+    }
+    y = Math.max(y, py);
   }
 
   // terms
@@ -188,27 +249,66 @@ export async function buildPdf(doc, profile) {
     });
   }
 
-  // payment details
-  const pay = [];
-  if (profile.upi && cur === 'INR') pay.push('UPI: ' + profile.upi);
-  if (profile.intlLink && cur === 'USD') pay.push('Pay online: ' + profile.intlLink);
-  if (pay.length) {
-    y += 4; newPageIfNeeded(12);
-    font('semibold', 8, SLATE); pdf.text('HOW TO PAY', L, y); y += 5.5;
-    font('regular', 9); pay.forEach((p) => { pdf.text(p, L, y); y += 4.8; });
-  }
+  drawFooter(k);
+  return new File([pdf.output('blob')], fileNameFor(doc.number, c.name), { type: 'application/pdf' });
+}
 
-  // footer on every page
-  const pages = pdf.getNumberOfPages();
-  for (let i = 1; i <= pages; i++) {
-    pdf.setPage(i);
-    font('regular', 7.5, SLATE);
-    if (co.tagline) pdf.text(co.tagline, W / 2, 287, { align: 'center' });
-    if (pages > 1) pdf.text(`${i} / ${pages}`, R, 287, { align: 'right' });
-  }
+/* ---------- payment receipt ---------- */
+export async function buildReceipt(txn, inv, profile, state) {
+  const k = await setup(txn.company);
+  const { pdf, font, SLATE, GREEN, SOFT, L, R } = k;
+  const cur = txn.currency || 'INR';
+  const m = (n) => money(n, cur);
 
-  const fileName = `${doc.number || 'draft'} ${c.name || ''}`.trim().replace(/[^\w\- ]+/g, '').replace(/\s+/g, '-') + '.pdf';
-  return new File([pdf.output('blob')], fileName, { type: 'application/pdf' });
+  await drawHeader(k, profile, 'RECEIPT', [txn.receiptNo || '', 'Date: ' + fmtDate(txn.date)]);
+
+  font('semibold', 7.5, SLATE); pdf.text('RECEIVED FROM', L, 50);
+  font('bold', 11.5); pdf.text(txn.party || (inv && inv.client ? inv.client.name : ''), L, 56);
+  if (inv && inv.client) {
+    font('regular', 9, SLATE);
+    let cy = 61.5;
+    for (const line of [inv.client.contact, [inv.client.city, inv.client.country].filter(Boolean).join(', ')].filter(Boolean)) { pdf.text(line, L, cy); cy += 4.6; }
+  }
+  pdf.setFillColor(...SOFT); pdf.roundedRect(128, 47, R - 128, 26, 3, 3, 'F');
+  font('semibold', 7.5, SLATE); pdf.text('AMOUNT RECEIVED', 133, 54);
+  font('bold', 17, GREEN); pdf.text(m(txn.amount), 133, 62.5);
+  font('regular', 8, SLATE); pdf.text('Thank you', 133, 68.5);
+
+  let y = 86;
+  const rows = [
+    ['Payment date', fmtDate(txn.date)],
+    ['Paid by', txn.method || '-'],
+  ];
+  if (txn.reference) rows.push(['Reference', txn.reference]);
+  if (inv) {
+    rows.push(['For invoice', `${inv.number} (${fmtDate(inv.date)})`]);
+    rows.push(['Invoice total', m(state.total)]);
+    rows.push(['Paid to date', m(state.paid)]);
+    rows.push([state.balance > 0 ? 'Balance remaining' : 'Status', state.balance > 0 ? m(state.balance) : 'Paid in full']);
+  }
+  if (txn.note) rows.push(['Note', txn.note]);
+  for (const [a, b] of rows) {
+    font('regular', 9.5, SLATE); pdf.text(a, L, y);
+    font(a === 'Balance remaining' || a === 'Status' ? 'bold' : 'semibold', 9.5); pdf.text(pdf.splitTextToSize(String(b), 110), 80, y);
+    y += 8;
+    pdf.setDrawColor(238, 240, 245); pdf.line(L, y - 4.5, R, y - 4.5);
+  }
+  y += 6;
+  font('regular', 8.5, SLATE);
+  pdf.text('This receipt confirms the payment above was received by ' + profile.displayName + '.', L, y);
+
+  drawFooter(k);
+  return new File([pdf.output('blob')], fileNameFor(txn.receiptNo, txn.party), { type: 'application/pdf' });
+}
+
+export function receiptMessage(txn, inv, profile, state) {
+  const m = (n) => money(n, txn.currency || 'INR');
+  const lines = [`Hello ${inv && inv.client ? (inv.client.contact || inv.client.name) : txn.party || ''},`, '',
+    `We have received ${m(txn.amount)} on ${fmtDate(txn.date)}${inv ? ` for invoice ${inv.number}` : ''}. Thank you!`];
+  if (inv) lines.push(state.balance > 0 ? `Balance remaining: ${m(state.balance)}.` : 'The invoice is now paid in full.');
+  lines.push(`Receipt ${txn.receiptNo} is attached.`, '', profile.displayName);
+  if (profile.whatsapp) lines.push(profile.whatsapp);
+  return lines.join('\n');
 }
 
 /* ---------- share / download ---------- */

@@ -6,6 +6,8 @@ import { hasPin, runLock } from './lock.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
 import { renderSettings, renderProfile, renderRateForm } from './settings.js';
 import { renderDocuments, renderEditor, renderDoc } from './quote.js';
+import { renderMoney, renderTxnForm } from './money.js';
+import { invoiceState, money, fmtDate, addDays } from './docs.js';
 
 const STORE_KEY = 'aurdesk.company';
 const AUTO_LOCK_MS = 60 * 1000;
@@ -20,12 +22,12 @@ const state = {
   id: null,
   preset: null, // client chosen before opening a new quotation
 };
-const cache = { clients: [], rates: [], docs: [], profiles: {}, owner: 'Shashank', lastBackup: null };
+const cache = { clients: [], rates: [], docs: [], txns: [], profiles: {}, owner: 'Shashank', lastBackup: null };
 
 /* ---------- data ---------- */
 async function load() {
-  [cache.clients, cache.rates, cache.docs, cache.profiles, cache.owner, cache.lastBackup] = await Promise.all([
-    db.all('clients'), db.all('rates'), db.all('docs'), db.getKV('profiles'), db.getKV('owner'), db.getKV('lastBackup'),
+  [cache.clients, cache.rates, cache.docs, cache.txns, cache.profiles, cache.owner, cache.lastBackup] = await Promise.all([
+    db.all('clients'), db.all('rates'), db.all('docs'), db.all('txns'), db.getKV('profiles'), db.getKV('owner'), db.getKV('lastBackup'),
   ]);
   cache.profiles ||= {};
   cache.owner ||= 'Shashank';
@@ -73,7 +75,17 @@ function greeting() {
 function renderHome() {
   const c = ctx.company();
   const month = new Date().toLocaleString('en-IN', { month: 'long' });
-  const received = 0, due = 0; // real figures arrive with invoices in step 4
+  const thisMonth = new Date().toLocaleDateString('en-CA').slice(0, 7);
+  const received = cache.txns
+    .filter((t) => t.company === state.company && t.type === 'in' && (t.currency || 'INR') === 'INR' && t.date.startsWith(thisMonth))
+    .reduce((s, t) => s + Number(t.amount || 0), 0);
+  const openInvoices = cache.docs
+    .filter((d) => d.company === state.company && d.kind === 'invoice')
+    .map((d) => ({ d, s: invoiceState(d, cache.txns) }))
+    .filter((x) => x.s.balance > 0)
+    .sort((a, b) => addDays(a.d.date, a.d.payment.balanceDays).localeCompare(addDays(b.d.date, b.d.payment.balanceDays)));
+  const due = openInvoices.filter((x) => x.d.currency === 'INR').reduce((s, x) => s + x.s.balance, 0);
+  const dueUsd = openInvoices.filter((x) => x.d.currency === 'USD').reduce((s, x) => s + x.s.balance, 0);
   const pct = received + due ? Math.round((received / (received + due)) * 100) : 0;
   const clients = cache.clients.filter((x) => x.company === state.company);
   const onboarding = clients.filter((x) => (x.checklist || []).some((i) => !i.done));
@@ -96,7 +108,7 @@ function renderHome() {
       <span class="label">${esc(month)} · ${esc(c.name)}</span>
       <div class="hero-grid">
         <div><small>Received</small><strong>${inr(received)}</strong></div>
-        <div><small>Still due</small><strong>${inr(due)}</strong></div>
+        <div><small>Still due</small><strong>${inr(due)}</strong>${dueUsd ? `<small>+ ${esc(money(dueUsd, 'USD'))}</small>` : ''}</div>
       </div>
       <div class="track"><div style="width:${pct}%"></div></div>
       <span class="label">${clients.length} ${clients.length === 1 ? 'client' : 'clients'} · ${openQuotes} open ${openQuotes === 1 ? 'quotation' : 'quotations'}</span>
@@ -114,9 +126,21 @@ function renderHome() {
     <div class="actions">
       <button class="action primary" data-new-quote>${icon('plus')}New quotation</button>
       <button class="action" data-onboard>${icon('client')}Onboard client</button>
-      <button class="action" data-soon="Recording payments">${icon('card')}Record payment</button>
-      <button class="action" data-soon="The calculator">${icon('calc')}Quick calculator</button>
+      <button class="action" data-record>${icon('card')}Record payment</button>
+      <button class="action" data-money>${icon('wallet')}Money in &amp; out</button>
     </div>
+
+    <section class="section">
+      <div class="section-head"><h2>Payments due</h2></div>
+      ${openInvoices.length ? `<div class="list">${openInvoices.slice(0, 5).map(({ d, s }) => `
+        <button class="list-row" data-inv="${d.id}">
+          <span class="list-main"><strong>${esc(d.client ? d.client.name : '')}</strong>
+            <small>${esc(d.number)} · ${s.advancePending ? 'advance due now' : 'due ' + esc(fmtDate(addDays(d.date, d.payment.balanceDays)))}</small></span>
+          <span class="doc-right"><strong>${esc(money(s.balance, d.currency))}</strong>
+            <span class="status ${s.status === 'partial' ? 'st-warn' : 'st-bad'}">${s.status === 'partial' ? 'Part paid' : 'Unpaid'}</span></span>
+        </button>`).join('')}</div>`
+      : '<div class="empty">Nothing due. Invoices with money still to come show up here.</div>'}
+    </section>
 
     <section class="section">
       <div class="section-head"><h2>Still onboarding</h2></div>
@@ -134,7 +158,9 @@ function renderHome() {
   view.querySelector('[data-onboard]').onclick = () => { setTab('clients'); ctx.go('client-form'); };
   view.querySelector('[data-new-quote]').onclick = () => { state.preset = null; setTab('documents'); ctx.go('doc-edit'); };
   view.querySelectorAll('[data-client]').forEach((b) => (b.onclick = () => { setTab('clients'); ctx.go('client', b.dataset.client); }));
-  view.querySelectorAll('[data-soon]').forEach((b) => (b.onclick = () => toast(b.dataset.soon + ' arrives in the next steps')));
+  view.querySelector('[data-record]').onclick = () => { setTab('money'); state.preset = { type: 'in' }; ctx.go('txn'); };
+  view.querySelector('[data-money]').onclick = () => setTab('money');
+  view.querySelectorAll('[data-inv]').forEach((b) => (b.onclick = () => { setTab('documents'); ctx.go('doc', b.dataset.inv); }));
   const gs = view.querySelector('[data-goto-settings]');
   if (gs) gs.onclick = () => setTab('settings');
   const gp = view.querySelector('[data-goto-profile]');
@@ -156,12 +182,13 @@ async function render() {
   const screens = {
     'client-form': renderClientForm, client: renderClient,
     profile: renderProfile, rate: renderRateForm,
-    'doc-edit': renderEditor, doc: renderDoc,
+    'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);
   else if (state.tab === 'home') renderHome();
   else if (state.tab === 'clients') renderClientList(ctx, view);
   else if (state.tab === 'documents') renderDocuments(ctx, view);
+  else if (state.tab === 'money') renderMoney(ctx, view);
   else if (state.tab === 'settings') await renderSettings(ctx, view);
   if (seq !== renderSeq) return;
 

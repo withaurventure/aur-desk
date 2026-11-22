@@ -115,7 +115,7 @@ a { color: var(--primary); }
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   max-width: 560px; margin: 0 auto;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--card); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -380,3 +380,38 @@ body.locked .app { visibility: hidden; }
 .doc-line.total { font-weight: 700; font-size: 16px; }
 .doc-line.total span:last-child { color: var(--primary); }
 .section-head .btn-sm { min-height: 40px; }
+
+/* =================== step 4: money =================== */
+.tab span { font-size: 10.5px; }
+.hero-grid small + small { font-size: 12px; }
+.month-row { display: flex; align-items: center; justify-content: space-between; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 2px 4px; }
+.month-row strong { font-size: 15px; }
+.month-row .icon-btn:disabled { opacity: .3; }
+.money-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; background: var(--hero); color: #fff; border-radius: 20px; padding: 18px; }
+.money-sum div { display: flex; flex-direction: column; gap: 4px; }
+.money-sum small { font-size: 12px; color: var(--hero-muted); }
+.money-sum strong { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.money-sum strong.in { color: #9BE3BD; }
+.money-sum strong.out { color: #FFC2AB; }
+.usd-line { grid-column: 1 / -1; margin: 4px 0 0; font-size: 12px; color: var(--hero-muted); }
+.day-head { margin: 0; font-size: 13px; font-weight: 600; color: var(--slate); }
+.txn-icon { width: 40px; height: 40px; flex: none; border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+.txn-icon svg { width: 20px; height: 20px; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.txn-icon.in { background: #E3F3EA; } .txn-icon.in svg { stroke: #1F7A52; }
+.txn-icon.out { background: var(--due-soft); } .txn-icon.out svg { stroke: var(--due); }
+.txn-amt { flex: none; font-size: 15px; font-variant-numeric: tabular-nums; }
+.txn-amt.in { color: #1F7A52; } .txn-amt.out { color: var(--due); }
+.amount-row { display: grid; grid-template-columns: 1fr 104px; gap: 10px; align-items: end; }
+.seg-cur label { font-size: 18px; font-weight: 600; }
+.seg-money input#ty-in:checked + label { color: #1F7A52; }
+.seg-money input#ty-out:checked + label { color: var(--due); }
+#txn-form .out-only { display: none; }
+#txn-form.is-out .out-only { display: flex; }
+#txn-form.is-out .in-only { display: none; }
+.pay-list { padding: 2px 0; }
+.pay-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; }
+.pay-row + .pay-row { border-top: 1px solid #EEF0F5; }
+.pay-row span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pay-row strong { font-size: 15px; color: #1F7A52; font-variant-numeric: tabular-nums; }
+.pay-row small { font-size: 12px; color: var(--slate); }
+.doc-hero .track { margin-top: 6px; }

@@ -27,12 +27,13 @@ export function money(n, cur = 'INR') {
 }
 
 /* ---------- numbering: AURS-Q-001, AURS-INV-001 (per company) ---------- */
+const CODES = { quote: 'Q', invoice: 'INV', receipt: 'RCP' };
 export async function nextNumber(company, kind) {
   const counters = (await db.getKV('counters')) || {};
-  const c = (counters[company] ||= { quote: 0, invoice: 0 });
-  c[kind] += 1;
+  const c = (counters[company] ||= {});
+  c[kind] = (c[kind] || 0) + 1;
   await db.setKV('counters', counters);
-  return `${COMPANIES[company].prefix}-${kind === 'quote' ? 'Q' : 'INV'}-${String(c[kind]).padStart(3, '0')}`;
+  return `${COMPANIES[company].prefix}-${CODES[kind]}-${String(c[kind]).padStart(3, '0')}`;
 }
 
 /* ---------- lines ---------- */
@@ -138,4 +139,30 @@ export async function convertToInvoice(quote) {
   quote.invoiceNumber = inv.number;
   await saveDoc(quote);
   return inv;
+}
+
+/* ---------- payments against invoices (recorded by hand in Money) ---------- */
+export function paymentsFor(invoiceId, txns) {
+  return txns.filter((t) => t.type === 'in' && t.invoiceId === invoiceId)
+    .sort((a, b) => (a.date + a.createdAt).localeCompare(b.date + b.createdAt));
+}
+
+// paid so far, what is left, and what the client should pay next
+export function invoiceState(inv, txns) {
+  const t = totals(inv);
+  const cur = inv.currency;
+  const paid = round(paymentsFor(inv.id, txns).reduce((s, x) => s + num(x.amount), 0), cur);
+  const balance = Math.max(0, round(t.total - paid, cur));
+  const status = paid <= 0 ? 'unpaid' : balance <= (cur === 'USD' ? 0.005 : 0.5) ? 'paid' : 'partial';
+  const advanceLeft = inv.payment.mode === 'full' ? balance : Math.max(0, round(t.advance - paid, cur));
+  const dueNow = advanceLeft > 0 ? advanceLeft : balance;
+  return { total: t.total, paid, balance, status, dueNow, advancePending: advanceLeft > 0 && inv.payment.mode !== 'full' };
+}
+
+export async function syncInvoice(invoiceId) {
+  if (!invoiceId) return;
+  const inv = await db.get('docs', invoiceId);
+  if (!inv) return;
+  const s = invoiceState(inv, await db.all('txns'));
+  if (inv.status !== s.status) { inv.status = s.status; inv.updatedAt = new Date().toISOString(); await db.put('docs', inv); }
 }

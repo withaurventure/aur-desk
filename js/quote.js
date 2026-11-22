@@ -3,9 +3,10 @@ import { db } from './db.js';
 import { esc, icon, pageHeader, toast, confirmBox, BILLING, MARKETS } from './ui.js';
 import {
   QUOTE_STATUS, INVOICE_STATUS, totals, autoTerms, money, fmtDate, addDays, lineFromRate, lineQty, lineAmount,
-  newQuote, saveDoc, snapshot, currencyFor, convertToInvoice, MARKET_PRICE_KEY,
+  newQuote, saveDoc, snapshot, currencyFor, convertToInvoice, MARKET_PRICE_KEY, invoiceState, paymentsFor,
 } from './docs.js';
-import { buildPdf, sharePdf, shareMessage, downloadFile } from './pdf.js';
+import { buildPdf, buildReceipt, receiptMessage, sharePdf, shareMessage, downloadFile } from './pdf.js';
+import { ensureReceiptNo } from './money.js';
 import { uid } from './ui.js';
 
 const statusLabel = (d) => (d.kind === 'quote' ? QUOTE_STATUS : INVOICE_STATUS)[d.status] || d.status;
@@ -387,6 +388,8 @@ export function renderDoc(ctx, view) {
   const profile = ctx.profile(d.company);
   const terms = [...autoTerms(d), ...String(d.terms || '').split('\n').map((s) => s.trim()).filter(Boolean)];
   const canConvert = isQuote && d.status !== 'invoiced' && d.status !== 'declined';
+  const ps = isQuote ? null : invoiceState(d, ctx.cache.txns);
+  const pays = isQuote ? [] : paymentsFor(d.id, ctx.cache.txns);
 
   view.innerHTML = `
     ${pageHeader(d.number || 'Draft', `${isQuote ? 'Quotation' : 'Invoice'} · ${fmtDate(d.date)}`,
@@ -397,8 +400,12 @@ export function renderDoc(ctx, view) {
         <span class="status ${statusClass(d)}">${esc(statusLabel(d))}</span>
         <span class="muted">${isQuote ? 'Valid until ' + esc(fmtDate(addDays(d.date, d.validityDays))) : 'Due ' + esc(fmtDate(addDays(d.date, d.payment.balanceDays)))}</span>
       </div>
-      <strong class="doc-total">${esc(m(t.total))}</strong>
-      <small>${d.payment.mode === 'full' ? 'Full payment' : `${d.payment.pct}% advance ${esc(m(t.advance))} · balance ${esc(m(t.balance))}`}${t.recurring ? ` · then ${esc(m(t.recurring))}/month` : ''}</small>
+      ${ps ? `
+        <strong class="doc-total">${esc(m(ps.balance))}</strong>
+        <small>${ps.balance > 0 ? `still due of ${esc(m(t.total))} · paid ${esc(m(ps.paid))}${ps.advancePending ? ` · advance due ${esc(m(ps.dueNow))}` : ''}` : `Paid in full · ${esc(m(t.total))}`}</small>
+        <div class="track"><div style="width:${t.total ? Math.min(100, Math.round(ps.paid / t.total * 100)) : 0}%"></div></div>`
+      : `<strong class="doc-total">${esc(m(t.total))}</strong>
+      <small>${d.payment.mode === 'full' ? 'Full payment' : `${d.payment.pct}% advance ${esc(m(t.advance))} · balance ${esc(m(t.balance))}`}${t.recurring ? ` · then ${esc(m(t.recurring))}/month` : ''}</small>`}
       <span class="doc-client">${esc(d.client ? d.client.name : '')}${d.client && d.client.prefers ? ` · prefers ${d.client.prefers === 'email' ? 'email' : 'WhatsApp'}` : ''}</span>
     </section>
 
@@ -436,7 +443,16 @@ export function renderDoc(ctx, view) {
       <ol class="card terms-list">${terms.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
     </section>
 
-    ${!isQuote ? '<div class="empty">Recording payments and receipts arrives in step 4.</div>' : ''}
+    ${!isQuote ? `
+      <section class="section">
+        <div class="section-head"><h2>Payments</h2><span class="muted">${pays.length} recorded</span></div>
+        ${pays.length ? `<div class="card pay-list">${pays.map((p) => `
+          <div class="pay-row">
+            <span><strong>${esc(m(p.amount))}</strong><small>${esc(fmtDate(p.date))} · ${esc(p.method || '')}${p.account ? ' · into ' + esc(p.account) : ''}</small></span>
+            <button class="btn btn-ghost btn-sm" data-receipt="${p.id}">${icon('receipt')}Receipt</button>
+          </div>`).join('')}</div>` : '<div class="empty">No payments recorded yet.</div>'}
+        ${ps.balance > 0 ? `<button class="btn btn-primary btn-block" data-record>${icon('plus')}Record a payment</button>` : ''}
+      </section>` : ''}
     ${!profile.upi && d.currency === 'INR' ? `<p class="hint">Tip: add your UPI ID in Settings → Company details and it will be printed on the PDF.</p>` : ''}
 
     <button class="btn btn-danger-ghost btn-block" data-delete>Delete ${isQuote ? 'quotation' : 'invoice'}</button>
@@ -448,7 +464,7 @@ export function renderDoc(ctx, view) {
 
   const makeFile = async (btn) => {
     btn.disabled = true; const label = btn.innerHTML; btn.textContent = 'Making PDF…';
-    try { return await buildPdf(d, profile); }
+    try { return await buildPdf(d, profile, ps); }
     catch (err) { console.error(err); toast('Could not make the PDF. Open the app once with internet, then try again.'); return null; }
     finally { btn.disabled = false; btn.innerHTML = label; }
   };
@@ -465,6 +481,26 @@ export function renderDoc(ctx, view) {
     const file = await makeFile(e.currentTarget);
     if (file) { downloadFile(file); toast('PDF saved to Downloads'); }
   };
+
+  const rec = view.querySelector('[data-record]');
+  if (rec) rec.onclick = () => { ctx.state.preset = { type: 'in', invoiceId: d.id }; ctx.go('txn'); };
+  view.querySelectorAll('[data-receipt]').forEach((b) => (b.onclick = async () => {
+    const txn = ctx.cache.txns.find((x) => x.id === b.dataset.receipt);
+    if (!txn) return;
+    b.disabled = true; const label = b.innerHTML; b.textContent = 'Making…';
+    try {
+      await ensureReceiptNo(txn);
+      // balance as it stood right after this payment
+      const upTo = pays.filter((p) => (p.date + p.createdAt) <= (txn.date + txn.createdAt));
+      const paid = upTo.reduce((s, p) => s + Number(p.amount || 0), 0);
+      const state = { total: t.total, paid, balance: Math.max(0, t.total - paid) };
+      const file = await buildReceipt(txn, d, profile, state);
+      const how = await sharePdf(file, receiptMessage(txn, d, profile, state), `Receipt ${txn.receiptNo}`);
+      if (how !== 'cancelled') toast(how === 'shared' ? 'Receipt sent' : 'Receipt saved to Downloads');
+      await ctx.reload(false);
+    } catch (err) { console.error(err); toast('Could not make the receipt'); }
+    finally { b.disabled = false; b.innerHTML = label; }
+  }));
 
   const conv = view.querySelector('[data-convert]');
   if (conv) conv.onclick = async () => {
@@ -485,9 +521,10 @@ export function renderDoc(ctx, view) {
   };
 
   view.querySelector('[data-delete]').onclick = async () => {
-    const ok = await confirmBox({ title: `Delete ${d.number}?`, text: 'This removes it from this phone. Its number will not be reused.', ok: 'Delete', danger: true });
+    const ok = await confirmBox({ title: `Delete ${d.number}?`, text: `This removes it from this phone. Its number will not be reused.${pays.length ? ' Its payments stay in Money, no longer linked to an invoice.' : ''}`, ok: 'Delete', danger: true });
     if (!ok) return;
     await db.del('docs', d.id);
+    for (const p of pays) { p.invoiceId = null; p.note = [p.note, `was for ${d.number} (deleted)`].filter(Boolean).join(' · '); await db.put('txns', p); }
     if (d.kind === 'invoice' && d.fromQuoteId) {
       const q = ctx.cache.docs.find((x) => x.id === d.fromQuoteId);
       if (q) { q.status = 'accepted'; delete q.invoiceId; delete q.invoiceNumber; await saveDoc(q); }
