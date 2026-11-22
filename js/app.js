@@ -217,23 +217,49 @@ switcher.addEventListener('click', (e) => {
   if (e.target === switcher || e.target.closest('[data-close]')) switcher.close();
 });
 
-/* ---------- lock ---------- */
+/* ---------- lock ----------
+   The app asks for the PIN when it is opened fresh, or after 1 minute in the background.
+   A refresh (or pull-to-refresh) within that minute keeps you unlocked: the "unlocked"
+   flag lives in sessionStorage, which survives a reload but is cleared when the app is closed. */
+const SESSION_KEY = 'aurdesk.unlocked';
+const ACTIVE_KEY = 'aurdesk.lastActive';
+const markActive = () => sessionStorage.setItem(ACTIVE_KEY, String(Date.now()));
+
+function stillUnlocked() {
+  const last = Number(sessionStorage.getItem(ACTIVE_KEY) || 0);
+  return sessionStorage.getItem(SESSION_KEY) === '1' && Date.now() - last < AUTO_LOCK_MS;
+}
+
 let locking = false;
 async function lock() {
   if (locking) return;
   locking = true;
+  sessionStorage.removeItem(SESSION_KEY);
   view.innerHTML = '';
   await runLock((await hasPin()) ? 'unlock' : 'setup');
+  sessionStorage.setItem(SESSION_KEY, '1');
+  markActive();
   locking = false;
   await load();
   render();
 }
 
-let hiddenAt = 0;
+async function start() {
+  if ((await hasPin()) && stillUnlocked()) {
+    markActive();
+    await load();
+    render();
+  } else {
+    lock();
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) hiddenAt = Date.now();
-  else if (hiddenAt && Date.now() - hiddenAt > AUTO_LOCK_MS) lock();
+  if (document.hidden) markActive();
+  else if (!locking && !stillUnlocked()) lock();
+  else markActive();
 });
+window.addEventListener('pagehide', markActive);
 
 /* ---------- start ---------- */
 if ('serviceWorker' in navigator) {
@@ -242,4 +268,4 @@ if ('serviceWorker' in navigator) {
 history.replaceState({ tab: 'home' }, '');
 applyTheme();
 keepDataSafe();
-lock();
+start();

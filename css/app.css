@@ -27,7 +27,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; height: 100%; overscroll-behavior-y: none; }
 body {
   background: var(--surface);
   color: var(--navy);
