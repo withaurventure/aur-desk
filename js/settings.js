@@ -1,7 +1,9 @@
 // AUR Desk — settings: company details, rate card, security, backup.
 import { db } from './db.js';
-import { COMPANIES } from './companies.js';
-import { esc, uid, icon, pageHeader, toast, confirmBox, priceLine, BILLING } from './ui.js';
+import { COMPANIES, BRAND_ORDER, CHECKLISTS } from './companies.js';
+import { GROUP } from './finance.js';
+import { catalogHtml, catalogBlock, bindCatalog } from './catalog.js';
+import { esc, uid, icon, pageHeader, toast, confirmBox, BILLING, UNITS } from './ui.js';
 import {
   status as backupStatus, setPassword, setPrefs, connect, disconnect, backupToDrive, FREQS, explain,
   listDriveBackups, downloadDriveBackup, decryptFile, restorePayload, summary, encryptedFileForPhone, warmUp,
@@ -10,50 +12,46 @@ import {
 
 /* ---------- main settings page ---------- */
 export async function renderSettings(ctx, view) {
-  const c = ctx.company();
-  const p = ctx.profile();
-  const rates = ctx.cache.rates.filter((r) => r.company === ctx.state.company)
-    .sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15) || a.name.localeCompare(b.name));
-  const groups = groupBy(rates, 'group');
   const bk = await backupStatus();
-  const missing = [!p.upi && 'UPI ID', !p.email && 'email'].filter(Boolean);
+  const count = (id) => ctx.cache.rates.filter((r) => r.company === id).length;
+  const g = ctx.profile(GROUP);
 
   view.innerHTML = `
     <h1 class="page-title">Settings</h1>
 
     <section class="section">
-      <div class="section-head"><h2>${esc(c.name)}</h2><span class="muted">switch company on Home</span></div>
-      <button class="list-row" data-go="profile">
-        <img class="row-logo" src="${c.logo}" alt="">
-        <span class="list-main"><strong>Company details</strong><small>${missing.length ? 'Missing: ' + esc(missing.join(', ')) : 'Contact and payment details complete'}</small></span>
-        ${icon('right', 'row-arrow')}
-      </button>
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Group</h2></div>
-      <button class="list-row" data-go="group">
-        <img class="row-logo" src="logos/aur-ventures.jpg" alt="">
-        <span class="list-main"><strong>AUR Ventures · parent company</strong><small>Legal details and GSTIN for both brands</small></span>
-        ${icon('right', 'row-arrow')}
-      </button>
-    </section>
-
-    <section class="section">
-      <div class="section-head"><h2>Rate card</h2><span class="muted">${rates.length} ${rates.length === 1 ? 'item' : 'items'}</span></div>
-      ${rates.length ? Object.entries(groups).map(([g, items]) => `
-        <div class="card rate-group">
-          <h3>${esc(g)}</h3>
-          ${items.map((r) => `
-            <button class="rate-row" data-rate="${r.id}">
-              <span><strong>${esc(r.name)}</strong><small>${esc(BILLING[r.billing] || '')}</small></span>
-              <span class="rate-price">${esc(priceLine(r))}</span>
-            </button>`).join('')}
-        </div>`).join('') : `<div class="empty">No prices yet for ${esc(c.name)}. Add items one by one, or import a rate card file.</div>`}
-      <div class="row-2">
-        <button class="btn btn-ghost" data-go="rate">${icon('plus')}Add item</button>
-        <label class="btn btn-ghost file-btn">${icon('restore')}Import file<input type="file" id="import-rates" accept=".txt,.json,application/json,text/plain"></label>
+      <div class="section-head"><h2>Companies</h2></div>
+      <div class="org card">
+        <button class="org-parent" data-go="group">
+          <img class="row-logo" src="logos/aur-ventures.jpg" alt="">
+          <span class="list-main"><strong>${esc(g.displayName || 'AUR Ventures')}</strong><small>Parent company · legal details, GSTIN</small></span>
+          ${icon('right', 'row-arrow')}
+        </button>
+        <div class="org-brands">
+          ${BRAND_ORDER.map((id) => {
+            const c = COMPANIES[id];
+            const p = ctx.profile(id);
+            const missing = [!p.upi && 'UPI', !p.email && 'email'].filter(Boolean);
+            return `
+            <button class="org-brand" data-brand="${id}">
+              <img class="row-logo" src="${c.logo}" alt="">
+              <span class="list-main"><strong>${esc(c.name)}</strong>
+                <small>${count(id)} services${missing.length ? ' · missing ' + esc(missing.join(', ')) : ''}</small></span>
+              ${ctx.state.company === id ? '<span class="chip chip-on">In use</span>' : ''}
+              ${icon('right', 'row-arrow')}
+            </button>`;
+          }).join('')}
+        </div>
       </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Rate cards</h2></div>
+      <button class="list-row folder-row" data-rates>
+        <span class="row-icon" aria-hidden="true">${icon('folder')}</span>
+        <span class="list-main"><strong>Rate cards</strong><small>${BRAND_ORDER.map((id) => `${esc(COMPANIES[id].short)} ${count(id)}`).join(' · ')} services · also used by the Calculator</small></span>
+        ${icon('right', 'row-arrow')}
+      </button>
     </section>
 
     <section class="section">
@@ -79,13 +77,12 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <button class="btn btn-ghost btn-block" data-update>Check for updates</button>
-    <p class="version">AUR Desk · step 8.1 · data stays on this phone</p>
+    <p class="version">AUR Desk · step 9 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
-  view.querySelectorAll('[data-rate]').forEach((b) => (b.onclick = () => ctx.go('rate', b.dataset.rate)));
-
-  view.querySelector('#import-rates').onchange = (e) => importRates(ctx, e.target);
+  view.querySelectorAll('[data-brand]').forEach((b) => (b.onclick = () => ctx.go('brand', b.dataset.brand)));
+  view.querySelector('[data-rates]').onclick = () => ctx.go('rates', ctx.state.company === 'printing' ? 'printing' : 'studio');
   bindBackup(ctx, view, bk);
 
   view.querySelector('[data-update]').onclick = async (e) => {
@@ -111,10 +108,129 @@ function groupBy(list, key) {
   return list.reduce((acc, x) => ((acc[x[key] || 'Other'] ||= []).push(x), acc), {});
 }
 
+/* ---------- one brand: everything about it in one place ---------- */
+export async function renderBrand(ctx, view) {
+  const id = BRAND_ORDER.includes(ctx.state.id) ? ctx.state.id : 'studio';
+  const c = COMPANIES[id];
+  const p = ctx.profile(id);
+  const active = ctx.state.company === id;
+  const clients = ctx.cache.clients.filter((x) => x.company === id);
+  const onboarded = clients.filter((x) => (x.checklist || []).length && x.checklist.every((i) => i.done)).length;
+  const services = ctx.cache.rates.filter((r) => r.company === id);
+  const cats = new Set(services.map((r) => r.group)).size;
+  const steps = await checklistFor(id);
+  const missing = [!p.upi && 'UPI ID', !p.email && 'email'].filter(Boolean);
+
+  view.innerHTML = `
+    ${pageHeader(c.name, 'Brand of AUR Ventures')}
+    <section class="brand-hero">
+      <img src="${c.logo}" alt="">
+      <div><strong>${esc(p.displayName || c.name)}</strong><small>${esc(c.tagline || '')}</small></div>
+    </section>
+    ${active
+      ? `<p class="in-use">${icon('check')}You're working in ${esc(c.short)} now. New clients and quotations go here.</p>`
+      : `<button class="btn btn-primary btn-block" data-use>${icon('swap')}Work in ${esc(c.name)}</button>`}
+
+    <section class="stat-row">
+      <div class="card stat"><strong>${clients.length}</strong><small>clients</small></div>
+      <div class="card stat"><strong>${onboarded}</strong><small>onboarded</small></div>
+      <div class="card stat"><strong>${services.length}</strong><small>services in ${cats} groups</small></div>
+    </section>
+
+    <section class="section">
+      <div class="list">
+        <button class="list-row" data-profile>
+          <span class="row-icon" aria-hidden="true">${icon('card')}</span>
+          <span class="list-main"><strong>Company details</strong><small>${missing.length ? 'Missing: ' + esc(missing.join(', ')) : 'Contact, payment and quotation defaults'}</small></span>
+          ${icon('right', 'row-arrow')}
+        </button>
+        <button class="list-row" data-rates>
+          <span class="row-icon" aria-hidden="true">${icon('folder')}</span>
+          <span class="list-main"><strong>Rate card</strong><small>${services.length} services · names, prices and what's included</small></span>
+          ${icon('right', 'row-arrow')}
+        </button>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Onboarding steps</h2><span class="muted">for new clients</span></div>
+      <div class="card">
+        <ol class="step-preview">${steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+        <details class="step-edit">
+          <summary>${icon('edit')}Edit steps</summary>
+          <div class="field">
+            <label for="steps-text">One step per line, in order</label>
+            <textarea id="steps-text" rows="6">${esc(steps.join('\n'))}</textarea>
+          </div>
+          <div class="row-2">
+            <button class="btn btn-ghost" data-steps-reset>Use defaults</button>
+            <button class="btn btn-primary" data-steps-save>Save steps</button>
+          </div>
+          <p class="hint">Applies to clients you add from now on. Existing clients keep their steps.</p>
+        </details>
+      </div>
+    </section>`;
+
+  const use = view.querySelector('[data-use]');
+  if (use) use.onclick = () => { ctx.switchCompany(id); toast(`Now working in ${c.name}`); ctx.render(); };
+  view.querySelector('[data-profile]').onclick = () => ctx.go('profile', id);
+  view.querySelector('[data-rates]').onclick = () => ctx.go('rates', id);
+  const saveSteps = async (list) => {
+    const all = (await db.getKV('checklists')) || {};
+    if (list) all[id] = list; else delete all[id];
+    await db.setKV('checklists', all);
+    toast('Onboarding steps saved');
+    ctx.render();
+  };
+  view.querySelector('[data-steps-save]').onclick = () => {
+    const list = view.querySelector('#steps-text').value.split('\n').map((x) => x.trim()).filter(Boolean);
+    if (!list.length) { toast('Add at least one step'); return; }
+    saveSteps(list);
+  };
+  view.querySelector('[data-steps-reset]').onclick = () => saveSteps(null);
+}
+
+export async function checklistFor(company) {
+  const all = (await db.getKV('checklists')) || {};
+  return all[company] && all[company].length ? all[company] : (CHECKLISTS[company] || []);
+}
+
+/* ---------- Rate cards folder: both brands, category → type → service ---------- */
+const rateView = { query: '', open: new Set() };
+export function renderRates(ctx, view) {
+  const id = BRAND_ORDER.includes(ctx.state.id) ? ctx.state.id : 'studio';
+  const n = ctx.cache.rates.filter((r) => r.company === id).length;
+
+  view.innerHTML = `
+    ${pageHeader('Rate cards', `${COMPANIES[id].name} · ${n} services`)}
+    <div class="seg" role="radiogroup" aria-label="Company">
+      ${BRAND_ORDER.map((b) => `<input type="radio" name="rco" id="rco-${b}" value="${b}" ${b === id ? 'checked' : ''}><label for="rco-${b}">${esc(COMPANIES[b].name)}</label>`).join('')}
+    </div>
+    ${catalogBlock('rc-cat', '', rateView, 'Search services, e.g. Instagram')}
+    <div class="row-2">
+      <button class="btn btn-ghost" data-add>${icon('plus')}Add service</button>
+      <label class="btn btn-ghost file-btn">${icon('restore')}Import file<input type="file" id="import-rates" accept=".txt,.json,application/json,text/plain"></label>
+    </div>
+    <p class="hint">Prices stay on this phone. The Calculator and quotations use them straight away.</p>`;
+
+  const draw = () => {
+    view.querySelector('#rc-cat').innerHTML = catalogHtml({
+      rates: ctx.cache.rates, company: id, mode: 'edit', open: rateView.open, query: rateView.query,
+      empty: `No services yet for ${esc(COMPANIES[id].name)}. Add them one by one, or import a rate card file.`,
+    });
+  };
+  bindCatalog(view, 'rc-cat', rateView, { redraw: draw, onEdit: (rid) => ctx.go('rate', rid) });
+  view.querySelectorAll('input[name=rco]').forEach((r) => (r.onchange = () => { rateView.query = ''; ctx.replace('rates', r.value); }));
+  view.querySelector('[data-add]').onclick = () => ctx.go('rate', 'new:' + id);
+  view.querySelector('#import-rates').onchange = (e) => importRates(ctx, e.target);
+  draw();
+}
+
 /* ---------- company details ---------- */
 export function renderProfile(ctx, view) {
-  const c = ctx.company();
-  const p = ctx.profile();
+  const id = BRAND_ORDER.includes(ctx.state.id) ? ctx.state.id : ctx.state.company;
+  const c = COMPANIES[id];
+  const p = ctx.profile(id);
   const field = (id, label, value, type = 'text', hint = '', extra = '') => `
     <div class="field">
       <label for="p-${id}">${esc(label)}</label>
@@ -163,7 +279,7 @@ export function renderProfile(ctx, view) {
       </div>
 
       <h2 class="form-section">Tax</h2>
-      ${field('gstin', 'GSTIN for this brand only', (ctx.cache.profiles[ctx.state.company] || {}).gstin || '', 'text', 'Usually leave empty: both brands use the GSTIN in Settings → Group (AUR Ventures) once you register.', 'autocapitalize="characters"')}
+      ${field('gstin', 'GSTIN for this brand only', (ctx.cache.profiles[id] || {}).gstin || '', 'text', 'Usually leave empty: both brands use the GSTIN in Settings → Group (AUR Ventures) once you register.', 'autocapitalize="characters"')}
 
       <button class="btn btn-primary btn-block" type="submit">Save details</button>
     </form>`;
@@ -184,7 +300,7 @@ export function renderProfile(ctx, view) {
       return;
     }
     const profiles = { ...(ctx.cache.profiles || {}) };
-    profiles[ctx.state.company] = next;
+    profiles[id] = next;
     await db.setKV('profiles', profiles);
     await ctx.reload(false);
     toast('Details saved');
@@ -194,69 +310,87 @@ export function renderProfile(ctx, view) {
 
 /* ---------- rate card item ---------- */
 export function renderRateForm(ctx, view) {
-  const company = ctx.state.company;
-  const existing = ctx.state.id ? ctx.cache.rates.find((r) => r.id === ctx.state.id) : null;
+  const sid = String(ctx.state.id || '');
+  const existing = sid && !sid.startsWith('new:') ? ctx.cache.rates.find((r) => r.id === sid) : null;
+  const company = existing ? existing.company : (sid.startsWith('new:') ? sid.slice(4) : ctx.state.company);
   const isPrint = company === 'printing';
   const r = existing || { billing: isPrint ? 'sqft' : 'monthly', prices: {} };
-  const groups = [...new Set(ctx.cache.rates.filter((x) => x.company === company).map((x) => x.group))];
+  const mine = ctx.cache.rates.filter((x) => x.company === company);
+  const groups = [...new Set(mine.map((x) => x.group))];
+  const subs = [...new Set(mine.map((x) => x.sub).filter(Boolean))];
 
   view.innerHTML = `
-    ${pageHeader(existing ? 'Edit price' : 'Add price', COMPANIES[company].name)}
+    ${pageHeader(existing ? 'Edit service' : 'Add service', COMPANIES[company].name)}
     <form class="form" id="rate-form">
       <div class="field">
-        <label for="r-group">Service</label>
-        <input id="r-group" name="group" list="group-list" required value="${esc(r.group)}" placeholder="${isPrint ? 'e.g. Flex banner' : 'e.g. Social media management'}">
+        <label for="r-group">Category</label>
+        <input id="r-group" name="group" list="group-list" required value="${esc(r.group)}" placeholder="${isPrint ? 'e.g. Flex & banners' : 'e.g. Social media management'}">
         <datalist id="group-list">${groups.map((g) => `<option value="${esc(g)}"></option>`).join('')}</datalist>
       </div>
       <div class="field">
-        <label for="r-name">${isPrint ? 'Variant' : 'Tier'}</label>
-        <input id="r-name" name="name" required value="${esc(r.name)}" placeholder="${isPrint ? 'e.g. Standard 10 oz' : 'e.g. Growth'}">
+        <label for="r-sub">Type (optional)</label>
+        <input id="r-sub" name="sub" list="sub-list" value="${esc(r.sub)}" placeholder="${isPrint ? 'e.g. Visiting cards — standard' : 'e.g. Instagram only'}">
+        <datalist id="sub-list">${subs.map((g) => `<option value="${esc(g)}"></option>`).join('')}</datalist>
       </div>
       <div class="field">
-        <label for="r-billing">Charged</label>
-        <select id="r-billing" name="billing">
-          ${Object.entries(BILLING).map(([v, l]) => `<option value="${v}" ${v === r.billing ? 'selected' : ''}>${l}</option>`).join('')}
-        </select>
-      </div>
-      <div class="row-3">
-        <div class="field"><label for="r-p1">Prayagraj ₹</label><input id="r-p1" name="prayagraj" type="number" inputmode="numeric" min="0" value="${r.prices.prayagraj ?? ''}"></div>
-        <div class="field"><label for="r-p2">India ₹</label><input id="r-p2" name="india" type="number" inputmode="numeric" min="0" value="${r.prices.india ?? ''}"></div>
-        <div class="field"><label for="r-p3">Abroad $</label><input id="r-p3" name="intl" type="number" inputmode="numeric" min="0" value="${r.prices.intl ?? ''}"></div>
-      </div>
-      <p class="hint">Leave a price empty if you don't offer this item in that market.</p>
-      <div class="field">
-        <label for="r-hours">Hours per month (for your own planning)</label>
-        <input id="r-hours" name="hours" type="number" inputmode="numeric" min="0" value="${r.hours ?? ''}">
+        <label for="r-name">Service name</label>
+        <input id="r-name" name="name" required value="${esc(r.name)}" placeholder="${isPrint ? 'e.g. Star flex (380 GSM)' : 'e.g. Growth'}">
       </div>
       <div class="field">
-        <label for="r-includes">What's included (printed on quotations)</label>
+        <label for="r-includes">What it includes (shown to clients and on quotations)</label>
         <textarea id="r-includes" name="includes" rows="3">${esc(r.includes)}</textarea>
       </div>
-      <button class="btn btn-primary btn-block" type="submit">Save price</button>
-      ${existing ? '<button class="btn btn-danger-ghost btn-block" type="button" data-delete>Delete this item</button>' : ''}
+      <div class="row-2">
+        <div class="field">
+          <label for="r-billing">Charged</label>
+          <select id="r-billing" name="billing">
+            ${Object.entries(BILLING).map(([v, l]) => `<option value="${v}" ${v === r.billing ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" id="unit-field" ${r.billing === 'piece' ? '' : 'hidden'}>
+          <label for="r-unit">Counted per</label>
+          <select id="r-unit" name="unit">${UNITS.map((u) => `<option value="${u}" ${u === (r.unit || 'piece') ? 'selected' : ''}>${u}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="row-3">
+        <div class="field"><label for="r-p1">Prayagraj ₹</label><input id="r-p1" name="prayagraj" type="number" inputmode="decimal" min="0" value="${r.prices.prayagraj ?? ''}"></div>
+        <div class="field"><label for="r-p2">India ₹</label><input id="r-p2" name="india" type="number" inputmode="decimal" min="0" value="${r.prices.india ?? ''}"></div>
+        <div class="field"><label for="r-p3">Abroad $</label><input id="r-p3" name="intl" type="number" inputmode="decimal" min="0" value="${r.prices.intl ?? ''}"></div>
+      </div>
+      <p class="hint">Leave a price empty if you don't offer this service in that market. "Per 1,000" prices are for 1,000 pieces.</p>
+      ${isPrint ? '' : `
+      <div class="field">
+        <label for="r-hours">Your hours per month (for the Calculator)</label>
+        <input id="r-hours" name="hours" type="number" inputmode="numeric" min="0" value="${r.hours ?? ''}">
+      </div>`}
+      <button class="btn btn-primary btn-block" type="submit">Save service</button>
+      ${existing ? '<button class="btn btn-danger-ghost btn-block" type="button" data-delete>Delete this service</button>' : ''}
     </form>`;
 
+  view.querySelector('#r-billing').onchange = (e) => { view.querySelector('#unit-field').hidden = e.target.value !== 'piece'; };
   const num = (v) => (v === '' || v == null ? null : Number(v));
   view.querySelector('#rate-form').onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
     const val = (k) => String(f.get(k) || '').trim();
-    if (!val('group') || !val('name')) { toast('Add the service and tier names'); return; }
+    if (!val('group') || !val('name')) { toast('Add the category and service name'); return; }
     await db.put('rates', {
+      ...(existing || {}),
       id: existing ? existing.id : uid(),
       company,
       order: existing ? existing.order : Date.now(),
-      group: val('group'), name: val('name'), billing: val('billing'),
+      group: val('group'), sub: val('sub'), name: val('name'), billing: val('billing'),
+      unit: val('billing') === 'piece' ? val('unit') : '',
       prices: { prayagraj: num(val('prayagraj')), india: num(val('india')), intl: num(val('intl')) },
       hours: num(val('hours')), includes: val('includes'),
     });
     await ctx.reload(false);
-    toast('Price saved');
+    toast('Service saved');
     ctx.back();
   };
   const del = view.querySelector('[data-delete]');
   if (del) del.onclick = async () => {
-    if (!(await confirmBox({ title: 'Delete this price?', text: `${r.group}: ${r.name}`, ok: 'Delete', danger: true }))) return;
+    if (!(await confirmBox({ title: 'Delete this service?', text: `${r.sub || r.group}: ${r.name}`, ok: 'Delete', danger: true }))) return;
     await db.del('rates', existing.id);
     await ctx.reload(false);
     ctx.back();
@@ -278,18 +412,23 @@ async function importRates(ctx, input) {
   if (data.app !== 'aur-desk' || data.kind !== 'rate-card' || !Array.isArray(data.items)) {
     toast("That file isn't an AUR Desk rate card"); return;
   }
+  const items = data.items.filter((i) => i.id && i.company && COMPANIES[i.company]);
+  const cos = [...new Set(items.map((i) => i.company))];
+  const names = cos.map((c) => COMPANIES[c].name).join(' and ');
+  const replace = data.mode === 'replace';
+  const now = ctx.cache.rates.filter((r) => cos.includes(r.company)).length;
   const ok = await confirmBox({
-    title: 'Import rate card?',
-    text: `${data.items.length} prices will be added. Items with the same ID are replaced; everything else stays.`,
-    ok: 'Import',
+    title: replace ? `Replace the ${names} rate card?` : 'Import rate card?',
+    text: replace
+      ? `The ${now} services there now are removed and ${items.length} services are added. Quotations already made keep their prices.`
+      : `${items.length} services will be added. Services with the same ID are replaced; everything else stays.`,
+    ok: replace ? 'Replace' : 'Import',
   });
   if (!ok) return;
-  for (const item of data.items) {
-    if (!item.id || !item.company || !COMPANIES[item.company]) continue;
-    await db.put('rates', item);
-  }
+  if (replace) for (const r of ctx.cache.rates.filter((x) => cos.includes(x.company))) await db.del('rates', r.id);
+  for (const item of items) await db.put('rates', item);
   await ctx.reload();
-  toast(`${data.items.length} prices imported`);
+  toast(`${items.length} services imported`);
 }
 
 /* =================== Backup to Google Drive =================== */

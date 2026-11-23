@@ -96,6 +96,6 @@ export const DEFAULT_PROFILES = {
 // Onboarding checklist each new client starts with.
 export const CHECKLISTS = {
   ventures: ['Kick-off call done', 'Agreement / quotation accepted', 'Advance payment received'],
-  studio: ['Kick-off call done', 'Brand assets received (logo, colours, photos)', 'Account access shared', 'Quotation accepted', 'Advance payment received'],
-  printing: ['Design / artwork received', 'Size and quantity confirmed', 'Advance payment received', 'Delivery date agreed'],
+  studio: ['Kick-off call done', 'Services agreed', 'Quotation accepted', 'Advance payment received', 'Brand assets received (logo, colours, photos)', 'Account access shared', 'Content plan approved', 'Live: first post published'],
+  printing: ['Requirement noted (item, size, quantity)', 'Design / artwork approved', 'Quotation accepted', 'Advance payment received', 'Printing done', 'Delivered / installed'],
 };

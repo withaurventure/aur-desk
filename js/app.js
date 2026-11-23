@@ -6,7 +6,7 @@ import { esc, inr, icon, toast } from './ui.js';
 import { hasPin, runLock, setThemeColor } from './security/lock.js';
 import { renderSecurity, getAutoLockMs } from './security/privacy.js';
 import { renderClientList, renderClientForm, renderClient } from './clients.js';
-import { renderSettings, renderProfile, renderRateForm, renderGroup } from './settings.js';
+import { renderSettings, renderProfile, renderRateForm, renderGroup, renderBrand, renderRates } from './settings.js';
 import { renderDocuments, renderEditor, renderDoc, resetEditor } from './quote.js';
 import { renderMoney, renderMoneyCompany, renderTxnForm } from './money.js';
 import { renderCalc } from './calc.js';
@@ -256,7 +256,7 @@ async function render() {
 
   const screens = {
     'client-form': renderClientForm, client: renderClient,
-    profile: renderProfile, rate: renderRateForm,
+    profile: renderProfile, rate: renderRateForm, brand: renderBrand, rates: renderRates,
     'doc-edit': renderEditor, doc: renderDoc, txn: renderTxnForm, calc: renderCalc, 'money-co': renderMoneyCompany, group: renderGroup, security: renderSecurity,
   };
   if (state.sub && screens[state.sub]) await screens[state.sub](ctx, view);

@@ -1,7 +1,9 @@
 // AUR Desk — Calculator: quick price check, profit plan, printing size.
 import { db } from './db.js';
-import { esc, uid, icon, pageHeader, toast, MARKETS } from './ui.js';
-import { money, totals, currencyFor, MARKET_PRICE_KEY, today } from './docs.js';
+import { esc, uid, icon, pageHeader, toast, MARKETS, unitSuffix } from './ui.js';
+import { money, totals, currencyFor, today, lineFromRate, lineTitle, qtyText, lineAmount } from './docs.js';
+import { COMPANIES, BRAND_ORDER } from './companies.js';
+import { catalogHtml, catalogBlock, bindCatalog, trayHtml, bindTray, stepFor, priceFor, byOrder, catalogTree } from './catalog.js';
 import { groupFigures } from './finance.js';
 
 const PLAN_DEFAULTS = { target: 100000, expenses: 30000, reserve: 15, hours: 120, clients: 5 };
@@ -10,7 +12,9 @@ const SIZES = [[2, 3], [3, 4], [3, 6], [4, 6], [5, 8], [6, 10], [8, 12], [10, 20
 // remembered while the app is open
 const mem = {
   mode: null,
-  price: { market: 'prayagraj', qty: {}, discount: '', pay: '50', gst: false },
+  price: { company: null, market: 'prayagraj', qty: {}, discount: '', pay: '50', gst: false },
+  cat: { query: '', open: new Set() },
+  trayOpen: false,
   print: { rateId: '', customRate: '', unit: 'ft', w: '', h: '', pieces: 1, extras: '', discount: '' },
   scope: 'all',
 };
@@ -22,7 +26,7 @@ export async function renderCalc(ctx, view) {
   if (!mem.mode) mem.mode = ctx.state.company === 'printing' ? 'print' : 'price';
 
   view.innerHTML = `
-    ${pageHeader('Calculator', ctx.company().name)}
+    ${pageHeader('Calculator', 'Prices from your rate cards')}
     <div class="seg" role="radiogroup" aria-label="Calculator">
       ${[['price', 'Price check'], ['profit', 'Profit'], ['print', 'Printing']].map(([v, l]) => `
         <input type="radio" name="cmode" id="cm-${v}" value="${v}" ${mem.mode === v ? 'checked' : ''}><label for="cm-${v}">${l}</label>`).join('')}
@@ -45,43 +49,28 @@ const floorPerHour = (plan) => {
 };
 
 /* =================== 1. Price check =================== */
+// Reads the same rate cards as Settings, so any price you change shows here at once.
 function priceCheck(ctx, body, plan) {
   const p = mem.price;
-  const company = ctx.state.company;
-  const profile = ctx.profile();
-  const key = MARKET_PRICE_KEY[p.market];
+  if (!p.company || !COMPANIES[p.company] || p.company === 'ventures') p.company = ctx.state.company === 'printing' ? 'printing' : 'studio';
+  const company = p.company;
+  const qty = (p.qty[company] ||= {});
+  const profile = ctx.profile(company);
   const cur = currencyFor(p.market);
-  const rates = ctx.cache.rates
-    .filter((r) => r.company === company && r.billing !== 'sqft')
-    .sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15) || a.name.localeCompare(b.name));
-  const groups = rates.reduce((acc, r) => ((acc[r.group] ||= []).push(r), acc), {});
+  const isRate = (r) => r.company === company && r.billing !== 'sqft';
+  const rates = ctx.cache.rates.filter(isRate);
+  for (const id of Object.keys(qty)) if (!rates.find((r) => r.id === id) || priceFor(rates.find((r) => r.id === id), p.market) == null) delete qty[id];
 
   body.innerHTML = `
     <div class="calc">
+      <div class="seg" role="radiogroup" aria-label="Company">
+        ${BRAND_ORDER.map((id) => `<input type="radio" name="pco" id="pco-${id}" value="${id}" ${company === id ? 'checked' : ''}><label for="pco-${id}">${esc(COMPANIES[id].short)}</label>`).join('')}
+      </div>
       <div class="seg" role="radiogroup" aria-label="Market">
         ${Object.entries(MARKETS).map(([v, l]) => `<input type="radio" name="pmarket" id="pm-${v}" value="${v}" ${p.market === v ? 'checked' : ''}><label for="pm-${v}">${l}</label>`).join('')}
       </div>
-
-      ${rates.length ? Object.entries(groups).map(([g, items]) => `
-        <div class="card calc-group">
-          <h3>${esc(g)}</h3>
-          ${items.map((r) => {
-            const price = r.prices ? r.prices[key] : null;
-            const ok = price != null && price !== '';
-            const q = p.qty[r.id] || 0;
-            return `
-            <div class="calc-item ${q ? 'on' : ''} ${ok ? '' : 'off'}">
-              <span class="calc-item-text"><strong>${esc(r.name)}</strong><small>${ok ? esc(money(price, cur)) + (r.billing === 'monthly' ? ' /month' : r.billing === 'piece' ? ' /piece' : ' one-time') : 'Not offered in this market'}</small></span>
-              ${ok ? `
-              <span class="stepper" role="group" aria-label="${esc(g + ' ' + r.name)} quantity">
-                <button type="button" data-dec="${r.id}" aria-label="Remove one" ${q ? '' : 'disabled'}>${icon('minus')}</button>
-                <output>${q}</output>
-                <button type="button" data-inc="${r.id}" aria-label="Add one">${icon('plus')}</button>
-              </span>` : ''}
-            </div>`;
-          }).join('')}
-        </div>`).join('')
-      : `<div class="empty">No rate card for ${esc(ctx.company().name)} yet. Add prices in Settings → Rate card.</div>`}
+      ${catalogBlock('pc-cat', '', mem.cat)}
+      ${company === 'printing' ? '<p class="hint">Banners and boards priced per sq ft are in the <strong>Printing</strong> tab.</p>' : ''}
 
       <div class="row-2">
         <div class="field">
@@ -100,12 +89,12 @@ function priceCheck(ctx, body, plan) {
         <button class="btn btn-ghost" data-clear>Clear</button>
         <button class="btn btn-primary" data-quote>${icon('plus')}Make quotation</button>
       </div>
-    </div>`;
+    </div>
+    <div id="pc-tray"></div>`;
 
   const doc = () => {
-    const lines = rates.filter((r) => p.qty[r.id]).map((r) => ({
-      id: uid(), rateId: r.id, group: r.group, name: r.name, billing: r.billing, includes: r.includes || '',
-      qty: p.qty[r.id], w: '', h: '', pieces: 1, price: r.prices[key], hours: n(r.hours),
+    const lines = rates.filter((r) => qty[r.id]).sort(byOrder).map((r) => ({
+      ...lineFromRate(r, p.market), qty: qty[r.id], hours: n(r.hours),
     }));
     return {
       kind: 'quote', currency: cur, market: p.market, lines, discountPct: p.discount,
@@ -114,12 +103,24 @@ function priceCheck(ctx, body, plan) {
     };
   };
 
+  const drawCatalog = () => {
+    body.querySelector('#pc-cat').innerHTML = catalogHtml({
+      rates: ctx.cache.rates, company, market: p.market, picked: qty, open: mem.cat.open, query: mem.cat.query,
+      filter: (r) => r.billing !== 'sqft',
+      empty: `No rate card for ${esc(COMPANIES[company].name)} yet. Add prices in Settings → Rate cards.`,
+    });
+  };
+
   const showResult = () => {
     const d = doc();
     const out = body.querySelector('#pc-result');
-    if (!d.lines.length) { out.innerHTML = '<p class="muted">Tap + on the services above to see the price.</p>'; return; }
-    const t = totals(d);
     const m = (v) => money(v, cur);
+    const t = d.lines.length ? totals(d) : null;
+    body.querySelector('#pc-tray').innerHTML = trayHtml(d.lines.map((l) => ({
+      id: l.rateId, title: lineTitle(l), detail: qtyText(l) + ' · ' + m(l.price) + unitSuffix(l), amount: m(lineAmount(l, cur)),
+    })), t ? m(t.total) + (t.recurring ? ` · then ${m(t.recurring)}/mo` : '') : '', { open: mem.trayOpen });
+    body.classList.toggle('with-tray', !!d.lines.length);
+    if (!d.lines.length) { out.innerHTML = '<p class="muted">Tap + on a service to add it. Picked services turn green.</p>'; return; }
     const monthlyLines = d.lines.filter((l) => l.billing === 'monthly');
     const hours = monthlyLines.reduce((s, l) => s + l.hours * n(l.qty), 0);
     const monthlyNet = monthlyLines.reduce((s, l) => s + n(l.price) * n(l.qty), 0) * (1 - Math.min(100, n(p.discount)) / 100);
@@ -141,24 +142,38 @@ function priceCheck(ctx, body, plan) {
         <p class="res-flag ${perHourInr >= f.perHour ? 'good' : 'warn'}">
           ${perHourInr >= f.perHour ? 'Above' : 'Below'} your ${esc(money(f.perHour))}/hour floor${perHourInr >= f.perHour ? '' : '. Raise the price, lower the discount, or treat it as a portfolio client'}.
         </p>` : ''}`;
+    bindTray(body, {
+      onToggle: () => { mem.trayOpen = !mem.trayOpen; showResult(); },
+      onRemove: (id) => { delete qty[id]; drawCatalog(); showResult(); },
+    });
   };
 
+  bindCatalog(body, 'pc-cat', mem.cat, {
+    redraw: drawCatalog,
+    onStep: (id, dir) => {
+      const r = rates.find((x) => x.id === id);
+      const next = stepFor(r, qty[id] || 0, dir);
+      if (next) qty[id] = next; else delete qty[id];
+      drawCatalog(); showResult();
+    },
+  });
+  body.querySelectorAll('input[name=pco]').forEach((r) => (r.onchange = () => { p.company = r.value; mem.cat.query = ''; priceCheck(ctx, body, plan); }));
   body.querySelectorAll('input[name=pmarket]').forEach((r) => (r.onchange = () => { p.market = r.value; priceCheck(ctx, body, plan); }));
-  body.querySelectorAll('[data-inc]').forEach((b) => (b.onclick = () => { p.qty[b.dataset.inc] = (p.qty[b.dataset.inc] || 0) + 1; priceCheck(ctx, body, plan); }));
-  body.querySelectorAll('[data-dec]').forEach((b) => (b.onclick = () => { p.qty[b.dataset.dec] = Math.max(0, (p.qty[b.dataset.dec] || 0) - 1); priceCheck(ctx, body, plan); }));
   body.querySelector('#pc-disc').oninput = (e) => { p.discount = e.target.value; showResult(); };
   body.querySelector('#pc-pay').onchange = (e) => { p.pay = e.target.value; showResult(); };
   const gst = body.querySelector('#pc-gst');
   if (gst) gst.onchange = () => { p.gst = gst.checked; showResult(); };
-  body.querySelector('[data-clear]').onclick = () => { p.qty = {}; p.discount = ''; priceCheck(ctx, body, plan); };
+  body.querySelector('[data-clear]').onclick = () => { p.qty[company] = {}; p.discount = ''; mem.trayOpen = false; priceCheck(ctx, body, plan); };
   body.querySelector('[data-quote]').onclick = () => {
     const d = doc();
     if (!d.lines.length) { toast('Add at least one service first'); return; }
     d.lines.forEach((l) => delete l.hours);
+    if (ctx.state.company !== company) { ctx.switchCompany(company); toast(`Switched to ${COMPANIES[company].name}`); }
     ctx.state.presetDraft = d;
     ctx.state.preset = null;
     ctx.go('doc-edit');
   };
+  drawCatalog();
   showResult();
 }
 
@@ -233,12 +248,16 @@ function profit(ctx, body, plan) {
 /* =================== 3. Printing size =================== */
 function printing(ctx, body) {
   const p = mem.print;
-  const items = ctx.cache.rates
-    .filter((r) => r.company === 'printing' && (r.billing === 'sqft' || r.billing === 'piece'))
-    .sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15) || a.name.localeCompare(b.name));
+  const PRINT_BILLING = ['sqft', 'piece', 'thousand'];
+  const items = ctx.cache.rates.filter((r) => r.company === 'printing' && PRINT_BILLING.includes(r.billing)).sort(byOrder);
+  const tree = catalogTree(ctx.cache.rates, 'printing', (r) => PRINT_BILLING.includes(r.billing));
   if (p.rateId && !items.find((r) => r.id === p.rateId)) p.rateId = '';
   const rate = items.find((r) => r.id === p.rateId);
-  const perPiece = rate && rate.billing === 'piece';
+  const perPiece = rate && rate.billing !== 'sqft';
+  const perK = rate && rate.billing === 'thousand';
+  if (perK && n(p.pieces) < 100) p.pieces = 1000;
+  if (!perK && n(p.pieces) >= 100 && p.lastK) p.pieces = 1;
+  p.lastK = !!perK;
 
   body.innerHTML = `
     <div class="calc">
@@ -246,9 +265,13 @@ function printing(ctx, body) {
         <label for="pr-item">Item (AUR Printing Studio rate card)</label>
         <select id="pr-item">
           <option value="">Custom rate</option>
-          ${items.map((r) => `<option value="${r.id}" ${r.id === p.rateId ? 'selected' : ''}>${esc(r.group)} — ${esc(r.name)} · ${esc(money(r.prices && r.prices.prayagraj))} ${r.billing === 'sqft' ? '/sq ft' : '/piece'}</option>`).join('')}
+          ${tree.map(({ group, subs }) => subs.map(({ sub, items: list }) => `
+            <optgroup label="${esc(sub ? group + ' · ' + sub : group)}">
+              ${list.map((r) => `<option value="${r.id}" ${r.id === p.rateId ? 'selected' : ''}>${esc(r.name)} · ${esc(money(r.prices && r.prices.prayagraj))}${esc(unitSuffix(r))}</option>`).join('')}
+            </optgroup>`).join('')).join('')}
         </select>
-        ${items.length ? '' : '<small class="hint">No printing prices yet. Add them in Settings → Rate card with AUR Printing Studio selected, or type a rate below.</small>'}
+        ${rate && rate.includes ? `<small class="hint">${esc(rate.includes)}</small>` : ''}
+        ${items.length ? '' : '<small class="hint">No printing prices yet. Add them in Settings → Rate cards → AUR Printing Studio, or type a rate below.</small>'}
       </div>
       ${rate ? '' : `
       <div class="field">
@@ -268,7 +291,7 @@ function printing(ctx, body) {
       </div>`}
 
       <div class="row-3">
-        <div class="field"><label for="pr-pcs">Pieces</label><input id="pr-pcs" type="number" inputmode="numeric" min="1" value="${esc(p.pieces)}"></div>
+        <div class="field"><label for="pr-pcs">${perK ? 'Quantity (pcs)' : rate && rate.billing === 'piece' && rate.unit && rate.unit !== 'piece' ? esc(rate.unit[0].toUpperCase() + rate.unit.slice(1) + 's') : 'Pieces'}</label><input id="pr-pcs" type="number" inputmode="numeric" min="1" step="${perK ? 500 : 1}" value="${esc(p.pieces)}"></div>
         <div class="field"><label for="pr-extra">Extras ₹</label><input id="pr-extra" type="number" inputmode="numeric" min="0" value="${esc(p.extras)}" placeholder="Design, fitting"></div>
         <div class="field"><label for="pr-disc">Discount %</label><input id="pr-disc" type="number" inputmode="decimal" min="0" max="100" value="${esc(p.discount)}" placeholder="0"></div>
       </div>
@@ -283,8 +306,8 @@ function printing(ctx, body) {
     const pieces = Math.max(1, n(p.pieces) || 1);
     const toFt = (v) => (p.unit === 'in' ? n(v) / 12 : n(v));
     const wFt = toFt(p.w), hFt = toFt(p.h);
-    const area = r && r.billing === 'piece' ? 0 : wFt * hFt;
-    const base = r && r.billing === 'piece' ? unitRate * pieces : area * pieces * unitRate;
+    const area = r && r.billing !== 'sqft' ? 0 : wFt * hFt;
+    const base = r && r.billing === 'thousand' ? unitRate * pieces / 1000 : r && r.billing === 'piece' ? unitRate * pieces : area * pieces * unitRate;
     const extras = n(p.extras);
     const sub = base + extras;
     const disc = Math.round(sub * Math.min(100, n(p.discount)) / 100);
@@ -321,9 +344,9 @@ function printing(ctx, body) {
     const c = calc();
     if (!c.total) { toast('Enter a size and rate first'); return; }
     const lines = [{
-      id: uid(), rateId: c.r ? c.r.id : null, custom: !c.r, group: c.r ? c.r.group : 'Printing', name: c.r ? c.r.name : 'Custom print',
-      billing: c.r && c.r.billing === 'piece' ? 'piece' : 'sqft', includes: c.r ? c.r.includes || '' : '',
-      qty: c.pieces, w: c.r && c.r.billing === 'piece' ? '' : +c.wFt.toFixed(2), h: c.r && c.r.billing === 'piece' ? '' : +c.hFt.toFixed(2), pieces: c.pieces, price: c.unitRate,
+      id: uid(), rateId: c.r ? c.r.id : null, custom: !c.r, group: c.r ? c.r.group : 'Printing', sub: c.r ? c.r.sub || '' : '', name: c.r ? c.r.name : 'Custom print',
+      billing: c.r ? c.r.billing : 'sqft', unit: c.r ? c.r.unit || '' : '', includes: c.r ? c.r.includes || '' : '',
+      qty: c.pieces, w: c.area ? +c.wFt.toFixed(2) : '', h: c.area ? +c.hFt.toFixed(2) : '', pieces: c.area ? c.pieces : 1, price: c.unitRate,
     }];
     if (c.extras) lines.push({ id: uid(), custom: true, group: 'Custom', name: 'Extras (design, fitting)', billing: 'once', includes: '', qty: 1, w: '', h: '', pieces: 1, price: c.extras });
     if (ctx.state.company !== 'printing') { ctx.switchCompany('printing'); toast('Switched to AUR Printing Studio'); }

@@ -5,10 +5,17 @@ export const usd = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('en-US
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 export const MARKETS = { prayagraj: 'Prayagraj', india: 'Other Indian city', intl: 'International' };
-export const BILLING = { monthly: 'Monthly', once: 'One-time', sqft: 'Per sq ft', piece: 'Per piece' };
+export const BILLING = { monthly: 'Monthly', once: 'One-time', sqft: 'Per sq ft', piece: 'Per piece', thousand: 'Per 1,000' };
+// words a "per piece" item can be counted in, shown as "Per book", "/page" …
+export const UNITS = ['piece', 'post', 'set', 'page', 'sheet', 'book', 'pad', 'card', 'calendar', 'design', 'session', 'job'];
+export const billingLabel = (x) => (x.billing === 'piece' && x.unit && x.unit !== 'piece' ? 'Per ' + x.unit : BILLING[x.billing] || '');
+export const unitSuffix = (x) => ({ monthly: ' /month', once: ' one-time', sqft: ' /sq ft', thousand: ' /1,000' }[x.billing] ?? ' /' + (x.unit || 'piece'));
 
 export const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  steps: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.5"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="4.5" cy="18" r="1.5"/>',
+  swap: '<path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/>',
   client: '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6M19 8v6M16 11h6"/>',
   card: '<rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20M6 15h4"/>',
   calc: '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M8 6h8M8 11h2M14 11h2M8 15h2M14 15h2M8 19h2M14 19h2"/>',
@@ -90,10 +97,7 @@ export function waLink(phone, text = '') {
 
 export function priceLine(item) {
   const p = item.prices || {};
-  if (item.billing === 'sqft' || item.billing === 'piece') {
-    const unit = item.billing === 'sqft' ? '/ sq ft' : '/ piece';
-    return `${inr(p.prayagraj)} ${unit}`;
-  }
+  if (item.billing !== 'monthly' && item.billing !== 'once') return `${inr(p.prayagraj)}${unitSuffix(item)}`;
   const parts = [];
   if (p.prayagraj) parts.push(inr(p.prayagraj));
   if (p.india) parts.push(inr(p.india));

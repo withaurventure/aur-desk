@@ -1,8 +1,10 @@
 // AUR Desk — clients: list, onboarding form, client page.
 import { db } from './db.js';
-import { CHECKLISTS } from './companies.js';
-import { esc, uid, icon, pageHeader, toast, confirmBox, waLink, MARKETS } from './ui.js';
+import { esc, uid, icon, pageHeader, toast, confirmBox, waLink, MARKETS, unitSuffix } from './ui.js';
 import { docRow, bindDocRows } from './quote.js';
+import { checklistFor } from './settings.js';
+import { money, totals, currencyFor, lineFromRate, lineTitle, qtyText, lineAmount, fmtDate } from './docs.js';
+import { catalogHtml, catalogBlock, bindCatalog, stepFor, priceFor, byOrder } from './catalog.js';
 
 const NICHES = ['Medical / clinic', 'Web3 / crypto', 'Retail / shop', 'Education', 'Restaurant / food', 'Real estate', 'Other'];
 
@@ -148,7 +150,7 @@ export function renderClientForm(ctx, view) {
       name: val('name'), contact: val('contact'), phone: val('phone'), email: val('email'),
       prefers: val('prefers'), market: val('market'), city: val('city'), country: val('country'),
       niche: val('niche'), notes: val('notes'),
-      checklist: existing ? existing.checklist : (CHECKLISTS[state.company] || []).map((label) => ({ label, done: false })),
+      checklist: existing ? existing.checklist : (await checklistFor(state.company)).map((label) => ({ label, done: false, at: null })),
       createdAt: existing ? existing.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -161,12 +163,20 @@ export function renderClientForm(ctx, view) {
 }
 
 /* ---------- client page ---------- */
+const svcPick = { query: '', open: new Set() };
+
 export function renderClient(ctx, view) {
   const x = ctx.cache.clients.find((c) => c.id === ctx.state.id);
   if (!x) { view.innerHTML = `${pageHeader('Client')}<div class="empty">This client no longer exists.</div>`; return; }
   const list = x.checklist || [];
   const done = list.filter((i) => i.done).length;
+  const pct = list.length ? Math.round(done / list.length * 100) : 0;
+  const next = list.findIndex((i) => !i.done);
   const docs = ctx.cache.docs.filter((d) => d.clientId === x.id).sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+  const cur = currencyFor(x.market);
+  const lines = serviceLines(ctx, x);
+  const preview = lines.length ? totals({ currency: cur, lines, discountPct: 0, payment: { mode: 'full' } }) : null;
+  const R = 26, C = 2 * Math.PI * R;
 
   view.innerHTML = `
     ${pageHeader(x.name, [x.contact, x.city].filter(Boolean).join(' · '),
@@ -182,18 +192,55 @@ export function renderClient(ctx, view) {
       <div><small>Market</small><span>${esc(MARKETS[x.market] || '-')}</span></div>
       <div><small>Documents by</small><span>${x.prefers === 'email' ? 'Email' : 'WhatsApp'}</span></div>
       <div><small>Industry</small><span>${esc(x.niche || '-')}</span></div>
-      <div><small>Country</small><span>${esc(x.country || '-')}</span></div>
+      <div><small>Client since</small><span>${esc(fmtDate((x.createdAt || '').slice(0, 10)) || '-')}</span></div>
     </section>
 
     <section class="section">
-      <div class="section-head"><h2>Onboarding</h2><span class="muted">${done} of ${list.length} done</span></div>
-      <div class="card checklist">
-        ${list.map((i, n) => `
-          <label class="check-row">
-            <input type="checkbox" data-check="${n}" ${i.done ? 'checked' : ''}>
-            <span>${esc(i.label)}</span>
-          </label>`).join('')}
+      <div class="onb card">
+        <div class="onb-head">
+          <svg class="ring" viewBox="0 0 64 64" aria-hidden="true">
+            <circle cx="32" cy="32" r="${R}" class="ring-bg"/>
+            <circle cx="32" cy="32" r="${R}" class="ring-fg" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - pct / 100)}"/>
+            <text x="32" y="37" text-anchor="middle">${pct}%</text>
+          </svg>
+          <div class="onb-title">
+            <h2>Onboarding</h2>
+            <small>${done === list.length && list.length ? 'Complete. Client is fully onboarded.' : `${done} of ${list.length} steps done`}</small>
+          </div>
+        </div>
+        ${next >= 0 ? `
+        <div class="onb-next">
+          <span><small>Next step</small><strong>${esc(list[next].label)}</strong></span>
+          <button class="btn btn-primary btn-sm" data-step-done="${next}">${icon('check')}Done</button>
+        </div>` : ''}
+        <ol class="timeline">
+          ${list.map((i, n) => `
+            <li class="tl ${i.done ? 'done' : n === next ? 'current' : ''}">
+              <button type="button" class="tl-btn" data-toggle="${n}" aria-pressed="${!!i.done}">
+                <span class="tl-dot" aria-hidden="true">${i.done ? icon('check') : n + 1}</span>
+                <span class="tl-text"><strong>${esc(i.label)}</strong>
+                  <small>${i.done ? 'Done' + (i.at ? ' · ' + esc(fmtDate(i.at.slice(0, 10))) : '') : n === next ? 'Up next' : 'To do'}</small></span>
+              </button>
+            </li>`).join('')}
+        </ol>
       </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Services</h2>${lines.length ? `<button class="btn btn-ghost btn-sm" data-services>${icon('edit')}Change</button>` : ''}</div>
+      ${lines.length ? `
+        <div class="card svc-chosen">
+          ${lines.map((l) => `
+            <div class="chosen-row">
+              <span class="tray-tick" aria-hidden="true">${icon('check')}</span>
+              <span class="tray-text"><strong>${esc(lineTitle(l))}</strong><small>${l.billing === 'sqft' ? 'Size goes in the quotation' : esc(qtyText(l))} · ${esc(money(l.price, cur))}${esc(unitSuffix(l))}</small></span>
+              <span class="tray-amt">${l.billing === 'sqft' ? 'by size' : esc(money(lineAmount(l, cur), cur))}</span>
+            </div>`).join('')}
+          <div class="chosen-total"><span>${preview.recurring ? 'First month' : 'Total'}</span><strong>${esc(money(preview.total, cur))}</strong></div>
+          ${preview.recurring ? `<div class="chosen-total sub"><span>Then each month</span><span>${esc(money(preview.recurring, cur))}</span></div>` : ''}
+        </div>
+        <button class="btn btn-primary btn-block" data-quote-svc>${icon('plus')}Make quotation from these</button>`
+      : `<div class="empty">No services chosen yet.<br><button class="btn btn-primary btn-sm" data-services>${icon('plus')}Choose services</button></div>`}
     </section>
 
     ${x.notes ? `<section class="section"><div class="section-head"><h2>Notes</h2></div><div class="card notes">${esc(x.notes)}</div></section>` : ''}
@@ -206,20 +253,34 @@ export function renderClient(ctx, view) {
     <button class="btn btn-danger-ghost btn-block" data-delete>Delete client</button>
   `;
 
+  const save = async (msg) => {
+    x.updatedAt = new Date().toISOString();
+    await db.put('clients', x);
+    await ctx.reload(false);
+    ctx.render();
+    if (msg) toast(msg);
+  };
+  const setStep = (n, on) => {
+    x.checklist[n].done = on;
+    x.checklist[n].at = on ? new Date().toISOString() : null;
+    const all = x.checklist.every((i) => i.done);
+    save(on && all ? `${x.name} is fully onboarded` : '');
+  };
+  view.querySelectorAll('[data-toggle]').forEach((b) => (b.onclick = () => setStep(Number(b.dataset.toggle), !x.checklist[Number(b.dataset.toggle)].done)));
+  const nd = view.querySelector('[data-step-done]');
+  if (nd) nd.onclick = () => setStep(Number(nd.dataset.stepDone), true);
+
   view.querySelector('[data-edit]').onclick = () => ctx.go('client-form', x.id);
   view.querySelector('[data-quote]').onclick = () => { ctx.state.preset = x.id; ctx.go('doc-edit'); };
+  view.querySelectorAll('[data-services]').forEach((b) => (b.onclick = () => chooseServices(ctx, x, save)));
+  const qs = view.querySelector('[data-quote-svc]');
+  if (qs) qs.onclick = () => {
+    if (ctx.state.company !== x.company) ctx.switchCompany(x.company);
+    ctx.state.preset = x.id;
+    ctx.state.presetDraft = { market: x.market, currency: cur, lines: serviceLines(ctx, x) };
+    ctx.go('doc-edit');
+  };
   bindDocRows(ctx, view);
-  view.querySelectorAll('[data-check]').forEach((box) => {
-    box.onchange = async () => {
-      x.checklist[Number(box.dataset.check)].done = box.checked;
-      x.updatedAt = new Date().toISOString();
-      await db.put('clients', x);
-      await ctx.reload(false);
-      const d = x.checklist.filter((i) => i.done).length;
-      view.querySelector('.section-head .muted').textContent = `${d} of ${x.checklist.length} done`;
-      if (d === x.checklist.length) toast(`${x.name} is fully onboarded`);
-    };
-  });
   view.querySelector('[data-delete]').onclick = async () => {
     const ok = await confirmBox({ title: `Delete ${x.name}?`, text: 'This removes the client from this phone. It cannot be undone unless you restore a backup.', ok: 'Delete', danger: true });
     if (!ok) return;
@@ -228,4 +289,59 @@ export function renderClient(ctx, view) {
     toast('Client deleted');
     ctx.back();
   };
+}
+
+/** the client's chosen services as quotation lines, at today's rate-card prices */
+function serviceLines(ctx, x) {
+  return (x.services || []).map((s) => {
+    const r = ctx.cache.rates.find((q) => q.id === s.rateId);
+    if (!r || priceFor(r, x.market) == null) return null;
+    return { ...lineFromRate(r, x.market), qty: s.qty };
+  }).filter(Boolean);
+}
+
+/** sheet with the full rate card; picked services turn green, a bar shows count and total */
+function chooseServices(ctx, x, save) {
+  const dlg = document.getElementById('picker');
+  const picked = Object.fromEntries((x.services || []).map((s) => [s.rateId, s.qty]));
+  const rates = ctx.cache.rates.filter((r) => r.company === x.company);
+  const cur = currencyFor(x.market);
+
+  dlg.innerHTML = `
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 class="sheet-title">Services for ${esc(x.name)}</h2>
+    <p class="hint">Prices for ${esc(MARKETS[x.market])}. Tap + to choose; chosen services turn green.</p>
+    <div class="picker-list">${catalogBlock('cs-cat', '', svcPick)}</div>
+    <div class="picker-foot" id="cs-foot"></div>`;
+
+  const draw = () => {
+    dlg.querySelector('#cs-cat').innerHTML = catalogHtml({
+      rates, company: x.company, market: x.market, picked, open: svcPick.open, query: svcPick.query,
+      empty: 'No rate card yet. Add services in Settings → Rate cards.',
+    });
+    const lines = rates.filter((r) => picked[r.id]).map((r) => ({ ...lineFromRate(r, x.market), qty: picked[r.id] }));
+    const t = lines.length ? totals({ currency: cur, lines, discountPct: 0, payment: { mode: 'full' } }) : null;
+    dlg.querySelector('#cs-foot').innerHTML = `
+      <span class="pk-sum ${lines.length ? 'on' : ''}">${lines.length ? `${icon('check')}${lines.length} chosen · ${esc(money(t.total, cur))}` : 'Nothing chosen yet'}</span>
+      <button class="btn btn-ghost" data-cancel>Cancel</button>
+      <button class="btn btn-primary" data-save>Save</button>`;
+  };
+  bindCatalog(dlg, 'cs-cat', svcPick, {
+    redraw: draw,
+    onStep: (id, dir) => {
+      const r = rates.find((q) => q.id === id);
+      const n = r.billing === 'sqft' ? Math.max(0, (picked[id] || 0) + dir) : stepFor(r, picked[id] || 0, dir);
+      if (n) picked[id] = n; else delete picked[id];
+      draw();
+    },
+  });
+  dlg.onclick = (e) => {
+    if (e.target.closest('[data-save]')) {
+      x.services = rates.filter((r) => picked[r.id]).sort(byOrder).map((r) => ({ rateId: r.id, qty: picked[r.id] }));
+      dlg.close();
+      save(x.services.length ? `${x.services.length} services saved` : 'Services cleared');
+    } else if (e.target === dlg || e.target.closest('[data-cancel]')) dlg.close();
+  };
+  draw();
+  dlg.showModal();
 }

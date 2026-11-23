@@ -76,3 +76,10 @@ Upload the changed files to the same repository, and change `VERSION` in `sw.js`
 - `fonts/`: Montserrat for PDFs, includes the ₹ sign (SIL Open Font Licence, see `fonts/OFL.txt`)
 - `sw.js`: offline support
 - `manifest.webmanifest`, `icons/`: install name and app icon
+
+## Step 9
+- Settings: Companies (AUR Ventures with its two brands) and one Rate cards folder for both brands.
+- Brand page: details, rate card, onboarding steps, and "Work in this brand".
+- Rate cards: category → type → service, each with price and what it includes. New units: Per 1,000, and per book/page/card/etc.
+- Calculator, quotation picker and client services all read the same rate cards; chosen services turn green with a bottom bar.
+- Client page: onboarding tracker (progress ring, next step, dated timeline) and a Services picker that builds the first quotation.

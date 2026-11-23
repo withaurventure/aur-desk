@@ -43,15 +43,25 @@ export const currencyFor = (market) => (market === 'intl' ? 'USD' : 'INR');
 export function lineFromRate(rate, market) {
   const price = rate.prices ? rate.prices[MARKET_PRICE_KEY[market]] : null;
   return {
-    id: uid(), rateId: rate.id, group: rate.group, name: rate.name, billing: rate.billing,
-    includes: rate.includes || '', qty: 1, w: '', h: '', pieces: 1, price: price ?? 0,
+    id: uid(), rateId: rate.id, group: rate.group, sub: rate.sub || '', name: rate.name, billing: rate.billing, unit: rate.unit || '',
+    includes: rate.includes || '', qty: rate.billing === 'thousand' ? 1000 : 1, w: '', h: '', pieces: 1, price: price ?? 0,
   };
 }
 export function lineQty(l) {
   if (l.billing === 'sqft') return num(l.w) * num(l.h) * (num(l.pieces) || 1);
   return num(l.qty) || 0;
 }
-export function lineAmount(l, cur) { return round(lineQty(l) * num(l.price), cur); }
+export function lineAmount(l, cur) { return round(lineQty(l) * num(l.price) / (l.billing === 'thousand' ? 1000 : 1), cur); }
+export const lineTitle = (l) => `${l.group} — ${l.name}`;
+// "2,000 pcs", "3 × month", "12.5 sq ft" — how much of a line is being sold
+export function qtyText(l) {
+  const q = lineQty(l);
+  if (l.billing === 'sqft') return `${+q.toFixed(2)} sq ft`;
+  if (l.billing === 'thousand') return `${q.toLocaleString('en-IN')} pcs`;
+  if (l.billing === 'monthly') return `${q} × month`;
+  if (l.billing === 'once') return q === 1 ? 'One-time' : `${q} × one-time`;
+  return `${q} × ${l.unit || 'unit'}`;
+}
 
 /* ---------- totals ---------- */
 export function totals(doc) {

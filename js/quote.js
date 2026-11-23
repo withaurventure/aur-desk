@@ -1,14 +1,15 @@
 // AUR Desk — Documents tab, quotation/invoice editor and document page.
 import { db } from './db.js';
-import { esc, icon, pageHeader, toast, confirmBox, BILLING, MARKETS } from './ui.js';
+import { esc, icon, pageHeader, toast, confirmBox, BILLING, MARKETS, billingLabel } from './ui.js';
 import {
-  QUOTE_STATUS, INVOICE_STATUS, totals, autoTerms, money, fmtDate, addDays, lineFromRate, lineQty, lineAmount,
+  QUOTE_STATUS, INVOICE_STATUS, totals, autoTerms, money, fmtDate, addDays, lineFromRate, lineQty, lineAmount, lineTitle, qtyText,
   newQuote, saveDoc, snapshot, currencyFor, convertToInvoice, MARKET_PRICE_KEY, invoiceState, paymentsFor,
 } from './docs.js';
 import { buildPdf, buildReceipt, receiptMessage, sharePdf, shareMessage, downloadFile } from './pdf.js';
 import { ensureReceiptNo } from './money.js';
 import { uid } from './ui.js';
 import { swipeRow, bindSwipeRows } from './swipe.js';
+import { catalogHtml, catalogBlock, bindCatalog, stepFor } from './catalog.js';
 
 const statusLabel = (d) => (d.kind === 'quote' ? QUOTE_STATUS : INVOICE_STATUS)[d.status] || d.status;
 const statusClass = (d) => ({ draft: 'st-muted', sent: 'st-info', accepted: 'st-good', declined: 'st-bad', invoiced: 'st-good', unpaid: 'st-bad', partial: 'st-warn', paid: 'st-good' }[d.status] || '');
@@ -216,7 +217,7 @@ function renderLines(ctx, view) {
       <div class="line-top">
         ${l.custom
           ? `<input class="line-name" data-f="name" value="${esc(l.name)}" placeholder="Item name" aria-label="Item name">`
-          : `<span class="line-title"><strong>${esc(l.group)} — ${esc(l.name)}</strong><small>${esc(BILLING[l.billing] || '')}</small></span>`}
+          : `<span class="line-title"><strong>${esc(lineTitle(l))}</strong><small>${esc(billingLabel(l))}</small></span>`}
         <button type="button" class="icon-btn icon-btn-sm" data-remove aria-label="Remove item">${icon('close')}</button>
       </div>
       ${l.custom ? `
@@ -228,17 +229,14 @@ function renderLines(ctx, view) {
           <div class="field"><label>Width ft</label><input data-f="w" type="number" inputmode="decimal" min="0" value="${l.w}"></div>
           <div class="field"><label>Height ft</label><input data-f="h" type="number" inputmode="decimal" min="0" value="${l.h}"></div>
           <div class="field"><label>Pieces</label><input data-f="pieces" type="number" inputmode="numeric" min="1" value="${l.pieces}"></div>`
-        : `<div class="field"><label>${l.billing === 'monthly' ? 'Months' : 'Qty'}</label><input data-f="qty" type="number" inputmode="numeric" min="0" value="${l.qty}"></div>`}
+        : `<div class="field"><label>${l.billing === 'monthly' ? 'Months' : l.billing === 'thousand' ? 'Quantity (pcs)' : 'Qty'}</label><input data-f="qty" type="number" inputmode="numeric" min="0" value="${l.qty}"></div>`}
         <div class="field"><label>Rate ${cur === 'USD' ? '$' : '₹'}</label><input data-f="price" type="number" inputmode="decimal" min="0" value="${l.price}"></div>
       </div>
       <div class="line-amount"><span data-qty-label>${esc(qtyLabel(l))}</span><strong data-amount>${esc(money(lineAmount(l, cur), cur))}</strong></div>
     </div>`).join('');
 }
 
-function qtyLabel(l) {
-  const q = lineQty(l);
-  return l.billing === 'sqft' ? `${+q.toFixed(2)} sq ft` : `${q} × ${l.billing === 'monthly' ? 'month' : 'unit'}`;
-}
+const qtyLabel = qtyText;
 
 function refresh(view) {
   const d = draft;
@@ -356,44 +354,56 @@ function reprice(ctx) {
 }
 
 /* ---------- rate card picker ---------- */
+// Same catalogue as Settings and the Calculator. Services already on this document show green with their count.
+const pickState = { query: '', open: new Set() };
 function openPicker(ctx, view, touch) {
   const d = draft;
   const dlg = document.getElementById('picker');
-  const key = MARKET_PRICE_KEY[d.market];
-  const rates = ctx.cache.rates
-    .filter((r) => r.company === d.company)
-    .sort((a, b) => (a.order ?? 1e15) - (b.order ?? 1e15) || a.name.localeCompare(b.name));
-  const groups = rates.reduce((acc, r) => ((acc[r.group] ||= []).push(r), acc), {});
+  const rates = ctx.cache.rates.filter((r) => r.company === d.company);
+  const counts = () => d.lines.reduce((acc, l) => {
+    if (l.rateId) acc[l.rateId] = (acc[l.rateId] || 0) + (l.billing === 'sqft' ? 1 : Number(l.qty) || 1);
+    return acc;
+  }, {});
 
   dlg.innerHTML = `
     <div class="sheet-handle" aria-hidden="true"></div>
     <h2 class="sheet-title">Add from rate card</h2>
-    <p class="hint">Prices shown for ${esc(MARKETS[d.market])}. You can change any rate after adding.</p>
-    <div class="picker-list">
-      ${rates.length ? Object.entries(groups).map(([g, items]) => `
-        <h3 class="picker-group">${esc(g)}</h3>
-        ${items.map((r) => {
-          const p = r.prices ? r.prices[key] : null;
-          const ok = p != null && p !== '';
-          return `<button class="picker-row" data-rate="${r.id}" ${ok ? '' : 'disabled'}>
-            <span><strong>${esc(r.name)}</strong><small>${esc(BILLING[r.billing] || '')}</small></span>
-            <span>${ok ? esc(money(p, d.currency)) : 'Not offered here'}</span>
-          </button>`;
-        }).join('')}`).join('')
-      : '<div class="empty">No rate card for this company yet. Add prices in Settings, or use a custom item.</div>'}
-    </div>
-    <button class="btn btn-ghost" data-close>Done</button>`;
+    <p class="hint">Prices for ${esc(MARKETS[d.market])}. Tap + to add; added services turn green. You can change any rate afterwards.</p>
+    <div class="picker-list">${catalogBlock('pk-cat', '', pickState)}</div>
+    <div class="picker-foot" id="pk-foot"></div>`;
+
+  const draw = () => {
+    const c = counts();
+    dlg.querySelector('#pk-cat').innerHTML = catalogHtml({
+      rates, company: d.company, market: d.market, picked: c, open: pickState.open, query: pickState.query,
+      empty: 'No rate card for this company yet. Add prices in Settings → Rate cards, or use a custom item.',
+    });
+    const n = Object.keys(c).length;
+    dlg.querySelector('#pk-foot').innerHTML = `
+      <span class="pk-sum ${n ? 'on' : ''}">${n ? `${icon('check')}${n} added · ${esc(money(totals(d).total, d.currency))}` : 'Nothing added yet'}</span>
+      <button class="btn btn-primary" data-close>Done</button>`;
+  };
+
+  bindCatalog(dlg, 'pk-cat', pickState, {
+    redraw: draw,
+    onStep: (id, dir) => {
+      const r = rates.find((x) => x.id === id);
+      const idx = d.lines.map((l) => l.rateId).lastIndexOf(id);
+      const l = idx >= 0 ? d.lines[idx] : null;
+      if (dir > 0) {
+        if (l && r.billing !== 'sqft') l.qty = stepFor(r, Number(l.qty) || 0, 1);
+        else d.lines.push(lineFromRate(r, d.market));
+      } else if (l) {
+        const next = r.billing === 'sqft' ? 0 : stepFor(r, Number(l.qty) || 0, -1);
+        if (next) l.qty = next; else d.lines.splice(idx, 1);
+      }
+      renderLines(ctx, view); touch(); draw();
+    },
+  });
   dlg.onclick = (e) => {
-    const b = e.target.closest('[data-rate]');
-    if (b && !b.disabled) {
-      const r = rates.find((x) => x.id === b.dataset.rate);
-      d.lines.push(lineFromRate(r, d.market));
-      renderLines(ctx, view); touch();
-      toast(`${r.group}: ${r.name} added`);
-      return;
-    }
     if (e.target === dlg || e.target.closest('[data-close]')) dlg.close();
   };
+  draw();
   dlg.showModal();
 }
 
@@ -447,7 +457,7 @@ export function renderDoc(ctx, view) {
       <div class="card doc-lines">
         ${d.lines.map((l) => `
           <div class="doc-line">
-            <span><strong>${esc(l.group)} — ${esc(l.name)}</strong><small>${esc(qtyLabel(l))} × ${esc(m(l.price))}</small></span>
+            <span><strong>${esc(lineTitle(l))}</strong><small>${esc(qtyLabel(l))} × ${esc(m(l.price))}</small></span>
             <span>${esc(m(lineAmount(l, d.currency)))}</span>
           </div>`).join('')}
         <div class="doc-line sub"><span>Subtotal</span><span>${esc(m(t.subtotal))}</span></div>

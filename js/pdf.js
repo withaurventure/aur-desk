@@ -1,8 +1,8 @@
 // AUR Desk — branded A4 PDFs for quotations and invoices, and sharing them.
 // Runs fully on the phone (jsPDF + Montserrat, which has the ₹ sign). Works offline.
 import { COMPANIES } from './companies.js';
-import { BILLING } from './ui.js';
-import { totals, autoTerms, money, fmtDate, addDays, lineQty, lineAmount } from './docs.js';
+import { billingLabel } from './ui.js';
+import { totals, autoTerms, money, fmtDate, addDays, lineQty, lineAmount, lineTitle, qtyText } from './docs.js';
 
 let libPromise;
 function loadLib() {
@@ -170,10 +170,10 @@ export async function buildPdf(doc, profile, pay = null) {
     const extra = [...sizeLine, ...inc];
     const h = 5 + extra.length * 3.8 + 3;
     if (newPageIfNeeded(h)) header();
-    font('semibold', 9.5); pdf.text(pdf.splitTextToSize(`${l.group} — ${l.name}`, COL.billing - COL.item - 6)[0], COL.item, y);
-    font('regular', 8.5, SLATE); pdf.text(BILLING[l.billing] || '', COL.billing, y);
+    font('semibold', 9.5); pdf.text(pdf.splitTextToSize(lineTitle(l), COL.billing - COL.item - 6)[0], COL.item, y);
+    font('regular', 8.5, SLATE); pdf.text(billingLabel(l), COL.billing, y);
     const q = lineQty(l);
-    font('regular', 9); pdf.text(l.billing === 'sqft' ? `${+q.toFixed(2)} sq ft` : String(q), COL.qty, y, { align: 'right' });
+    font('regular', 9); pdf.text(l.billing === 'sqft' ? `${+q.toFixed(2)} sq ft` : l.billing === 'thousand' ? q.toLocaleString('en-IN') : String(q), COL.qty, y, { align: 'right' });
     pdf.text(m(l.price), COL.rate, y, { align: 'right' });
     font('semibold', 9); pdf.text(m(lineAmount(l, cur)), COL.amount, y, { align: 'right' });
     font('regular', 8, SLATE);
