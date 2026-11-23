@@ -14,7 +14,8 @@ No app store, no build tools.
 - Step 4: Money tab to record money in and out by hand (who, which account, method, reference,
   what for), payments linked to invoices update them to Part paid / Paid, receipts as PDFs,
   UPI QR on invoices once a UPI ID is added, real Received / Still due figures on Home
-- Swipe a document right to send, left to edit or delete (always asks first); Back always returns
+- Swipe a document or a money entry right to send (PDF, receipt or summary), left to edit or delete
+  (always asks first; gestures in `js/swipe.js`); Back always returns
   to where you came from
 - Calculator: price check from the rate card (with your hourly floor), profit plan against this
   month's Money entries, printing size calculator; price check and printing turn into a quotation in one tap

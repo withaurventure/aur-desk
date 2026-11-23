@@ -8,6 +8,7 @@ import {
 import { buildPdf, buildReceipt, receiptMessage, sharePdf, shareMessage, downloadFile } from './pdf.js';
 import { ensureReceiptNo } from './money.js';
 import { uid } from './ui.js';
+import { swipeRow, bindSwipeRows } from './swipe.js';
 
 const statusLabel = (d) => (d.kind === 'quote' ? QUOTE_STATUS : INVOICE_STATUS)[d.status] || d.status;
 const statusClass = (d) => ({ draft: 'st-muted', sent: 'st-info', accepted: 'st-good', declined: 'st-bad', invoiced: 'st-good', unpaid: 'st-bad', partial: 'st-warn', paid: 'st-good' }[d.status] || '');
@@ -47,14 +48,8 @@ export function renderDocuments(ctx, view) {
 
 export function docRow(d) {
   const t = totals(d);
-  return `
-  <div class="swipe" data-swipe="${d.id}">
-    <div class="swipe-under swipe-send" aria-hidden="true">${icon('send')}<span>Send</span></div>
-    <div class="swipe-under swipe-tray">
-      <button class="tray-btn tray-edit" data-act="edit" tabindex="-1">${icon('edit')}<span>Edit</span></button>
-      <button class="tray-btn tray-delete" data-act="delete" tabindex="-1">${icon('trash')}<span>Delete</span></button>
-    </div>
-    <button class="list-row swipe-front" data-doc="${d.id}">
+  return swipeRow('doc', d.id, `
+    <button class="list-row" data-doc="${d.id}">
       <span class="list-main">
         <strong>${esc(d.client ? d.client.name : 'No client')}</strong>
         <small>${esc(d.number || 'Draft')} · ${esc(fmtDate(d.date))}</small>
@@ -63,8 +58,7 @@ export function docRow(d) {
         <strong>${esc(money(t.total, d.currency))}</strong>
         <span class="status ${statusClass(d)}">${esc(statusLabel(d))}</span>
       </span>
-    </button>
-  </div>`;
+    </button>`);
 }
 export function bindDocRows(ctx, root, rerender = () => ctx.render()) {
   root.querySelectorAll('[data-doc]').forEach((b) => (b.onclick = () => ctx.go('doc', b.dataset.doc)));
@@ -582,70 +576,21 @@ export async function deleteDoc(ctx, d) {
   toast(`${d.number} deleted`);
 }
 
-/* =================== swipe rows ===================
-   Swipe right → Send.  Swipe left → shows Edit and Delete.  Tap → opens the document.
-   Every action asks "Are you sure?" first. */
-const SEND_AT = 96;     // px to the right that counts as "send"
-const TRAY = 156;       // width of the Edit + Delete tray
-
+/* =================== swipe actions on document rows (gestures live in swipe.js) =================== */
 export function bindSwipes(ctx, root, rerender) {
-  let openRow = null;
-  const close = (row) => { if (!row) return; row.querySelector('.swipe-front').style.transform = ''; row.classList.remove('open'); if (openRow === row) openRow = null; };
-
-  root.querySelectorAll('.swipe').forEach((row) => {
-    const front = row.querySelector('.swipe-front');
-    const d = () => ctx.cache.docs.find((x) => x.id === row.dataset.swipe);
-    let x0 = 0, y0 = 0, dx = 0, base = 0, dragging = false, decided = false, moved = false;
-
-    front.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      if (openRow && openRow !== row) close(openRow);
-      x0 = e.clientX; y0 = e.clientY; dx = 0; moved = false; decided = false; dragging = true;
-      base = row.classList.contains('open') ? -TRAY : 0;
-      front.style.transition = 'none';
-    });
-    front.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const mx = e.clientX - x0, my = e.clientY - y0;
-      if (!decided) {
-        if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
-        decided = true;
-        if (Math.abs(my) > Math.abs(mx)) { dragging = false; front.style.transition = ''; return; } // vertical: let the page scroll
-        front.setPointerCapture(e.pointerId);
-      }
-      moved = true;
-      dx = Math.max(-TRAY - 30, Math.min(SEND_AT + 40, base + mx));
-      front.style.transform = `translateX(${dx}px)`;
-      row.classList.toggle('going-right', dx > 0);
-      row.classList.toggle('armed', dx >= SEND_AT);
-    });
-    const end = async () => {
-      if (!dragging) return;
-      dragging = false;
-      front.style.transition = '';
-      row.classList.remove('armed');
-      if (!moved) return;
-      if (dx >= SEND_AT) { front.style.transform = ''; await askSend(ctx, d()); return; }
-      if (dx <= -TRAY / 2) { front.style.transform = `translateX(${-TRAY}px)`; row.classList.add('open'); openRow = row; }
-      else close(row);
-    };
-    front.addEventListener('pointerup', end);
-    front.addEventListener('pointercancel', end);
-    // a drag is not a tap: don't open the document after swiping
-    front.addEventListener('click', (e) => {
-      if (moved || row.classList.contains('open')) { e.stopImmediatePropagation(); e.preventDefault(); if (!moved) close(row); moved = false; }
-    }, true);
-
-    row.querySelector('[data-act=edit]').onclick = async () => {
-      const doc = d(); close(row);
+  const find = (id) => ctx.cache.docs.find((x) => x.id === id);
+  bindSwipeRows(root, 'doc', {
+    send: (id) => askSend(ctx, find(id)),
+    edit: async (id) => {
+      const doc = find(id);
       if (doc.kind === 'quote' && doc.status === 'invoiced') { toast('This quotation is already invoiced. Edit its invoice instead.'); return; }
       const ok = await confirmBox({ title: `Edit ${doc.number}?`, text: `Opens ${doc.kind === 'quote' ? 'the quotation' : 'the invoice'} for ${doc.client ? doc.client.name : 'this client'} so you can change it.`, ok: 'Edit' });
       if (ok) ctx.go('doc-edit', doc.id);
-    };
-    row.querySelector('[data-act=delete]').onclick = async () => {
-      const doc = d(); close(row);
+    },
+    delete: async (id) => {
+      const doc = find(id);
       if (await confirmDelete(ctx, doc)) { await deleteDoc(ctx, doc); rerender(); }
-    };
+    },
   });
 }
 

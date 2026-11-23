@@ -2,7 +2,9 @@
 // A payment linked to an invoice updates that invoice (Part paid / Paid) automatically.
 import { db } from './db.js';
 import { esc, uid, icon, pageHeader, toast, confirmBox } from './ui.js';
-import { money, fmtDate, today, invoiceState, syncInvoice, nextNumber } from './docs.js';
+import { money, fmtDate, today, invoiceState, syncInvoice, nextNumber, paymentsFor, totals } from './docs.js';
+import { buildReceipt, receiptMessage, sharePdf } from './pdf.js';
+import { swipeRow, bindSwipeRows } from './swipe.js';
 import { COMPANIES, COMPANY_ORDER } from './companies.js';
 import { groupFigures, breakdown, GROUP, TRANSFER_OUT, PROJECTS, FUNDING, isInternal, isFunding } from './finance.js';
 
@@ -62,7 +64,7 @@ function entryList(list, showCompany, emptyText) {
       <section class="section">
         <h2 class="day-head">${esc(fmtDate(day))}</h2>
         <div class="list">${items.map((t) => txnRow(t, showCompany)).join('')}</div>
-      </section>`).join('')
+      </section>`).join('') + '<p class="hint swipe-hint">Swipe an entry right to send a receipt or share it, or left to edit or delete it.</p>'
     : `<div class="empty">${emptyText}</div>`}`;
 }
 
@@ -201,15 +203,100 @@ export function renderMoneyCompany(ctx, view) {
 export function txnRow(t, showCompany = false) {
   const sub = [isFunding(t) ? 'Funding: ' + (t.category || 'other') : '', isInternal(t) ? 'Internal move' : '', t.type === 'in' ? 'into ' + (t.account || '-') : 'from ' + (t.account || '-'), t.method, t.invoiceNumber, t.type === 'out' && !isInternal(t) ? (t.project ? t.project + ' · ' : '') + (t.category || '') : '']
     .filter(Boolean).join(' · ');
-  return `
+  return swipeRow('txn', t.id, `
     <button class="list-row" data-txn="${t.id}">
       <span class="txn-icon ${t.type}" aria-hidden="true">${icon(t.type === 'in' ? 'arrowIn' : 'arrowOut')}</span>
       <span class="list-main"><strong>${esc(t.party || (t.type === 'in' ? 'Money in' : 'Money out'))}</strong><small>${showCompany && COMPANIES[t.company] ? `<span class="co-tag" style="--co:${COMPANIES[t.company].theme.dot}">${esc(COMPANIES[t.company].short)}</span>` : ''}${esc(sub)}</small></span>
       <strong class="txn-amt ${t.type}">${t.type === 'in' ? '+' : '−'}${esc(money(t.amount, t.currency || 'INR'))}</strong>
-    </button>`;
+    </button>`, sendsReceipt(t) ? 'Receipt' : 'Share');
 }
+
+/* tap opens the entry; swipe right sends (receipt or summary); swipe left shows Edit / Delete */
 export function bindTxnRows(ctx, root) {
   root.querySelectorAll('[data-txn]').forEach((b) => (b.onclick = () => { ctx.state.preset = null; ctx.go('txn', b.dataset.txn); }));
+  const find = (id) => ctx.cache.txns.find((x) => x.id === id);
+  bindSwipeRows(root, 'txn', {
+    send: (id) => sendTxn(ctx, find(id)),
+    edit: async (id) => {
+      const t = find(id);
+      const ok = await confirmBox({ title: 'Edit this entry?', text: `${entryLabel(t)} on ${fmtDate(t.date)}. Opens it so you can change it.`, ok: 'Edit' });
+      if (ok) { ctx.state.preset = null; ctx.go('txn', id); }
+    },
+    delete: async (id) => {
+      const t = find(id);
+      if (!(await confirmDeleteTxn(t))) return;
+      await deleteTxn(ctx, t);
+    },
+  });
+}
+
+const sendsReceipt = (t) => t.type === 'in' && t.company !== GROUP;
+const entryLabel = (t) => `${t.type === 'in' ? (t.company === GROUP ? 'Funding in' : 'Money in') : 'Money out'} of ${money(t.amount, t.currency || 'INR')}${t.party ? (t.type === 'in' ? ' from ' : ' to ') + t.party : ''}`;
+
+export function confirmDeleteTxn(t) {
+  return confirmBox({
+    title: 'Are you sure you want to delete this entry?',
+    text: `${entryLabel(t)} on ${fmtDate(t.date)}.${t.invoiceNumber ? ` ${t.invoiceNumber} will show this amount as unpaid again.` : ''} This can't be undone.`,
+    ok: 'Delete', danger: true,
+  });
+}
+export async function deleteTxn(ctx, t) {
+  await db.del('txns', t.id);
+  await syncInvoice(t.invoiceId);
+  await ctx.reload();
+  toast('Entry deleted');
+}
+
+// Money in (Studio / Printing): a receipt PDF. Anything else: a short summary to share (e.g. with your CA).
+async function sendTxn(ctx, t) {
+  if (sendsReceipt(t)) {
+    const ok = await confirmBox({
+      title: 'Send a receipt?',
+      text: `Makes ${t.receiptNo ? 'receipt ' + t.receiptNo : 'a receipt'} for ${money(t.amount, t.currency || 'INR')}${t.party ? ' from ' + t.party : ''} and opens the share menu, so you can send it on WhatsApp or email.`,
+      ok: 'Send receipt',
+    });
+    if (!ok) return;
+    try {
+      await ensureReceiptNo(t);
+      const inv = t.invoiceId ? ctx.cache.docs.find((d) => d.id === t.invoiceId) : null;
+      let state = null;
+      if (inv) {
+        // the invoice's balance as it stood right after this payment
+        const upTo = paymentsFor(inv.id, ctx.cache.txns).filter((p) => (p.date + p.createdAt) <= (t.date + t.createdAt));
+        const paid = upTo.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+        const total = totals(inv).total;
+        state = { total, paid, balance: Math.max(0, total - paid) };
+      }
+      const profile = ctx.profile(t.company);
+      const file = await buildReceipt(t, inv, profile, state);
+      const how = await sharePdf(file, receiptMessage(t, inv, profile, state), `Receipt ${t.receiptNo}`);
+      if (how !== 'cancelled') toast(how === 'shared' ? 'Receipt sent' : 'Receipt saved to Downloads');
+      await ctx.reload(false);
+    } catch (err) { console.error(err); toast('Could not make the receipt. Open the app once with internet, then try again.'); }
+    return;
+  }
+  const ok = await confirmBox({ title: 'Share this entry?', text: `${entryLabel(t)} on ${fmtDate(t.date)}. Opens the share menu with a short summary, for example to send to your CA.`, ok: 'Share' });
+  if (!ok) return;
+  const co = COMPANIES[t.company];
+  const lines = [
+    `${co ? co.name : ''} · ${t.type === 'in' ? (t.company === GROUP ? 'Funding in' : 'Money in') : 'Money out'}`,
+    `Amount: ${money(t.amount, t.currency || 'INR')}`,
+    `Date: ${fmtDate(t.date)}`,
+    t.party ? `${t.type === 'in' ? 'From' : 'To'}: ${t.party}` : '',
+    t.account ? `${t.type === 'in' ? 'Into' : 'From'} account: ${t.account}` : '',
+    t.method ? `Method: ${t.method}` : '',
+    t.category ? `${t.type === 'in' ? 'Type' : 'For'}: ${t.category}` : '',
+    t.project ? `Project: ${t.project}` : '',
+    t.reference ? `Reference: ${t.reference}` : '',
+    t.invoiceNumber ? `Invoice: ${t.invoiceNumber}` : '',
+    t.note ? `Note: ${t.note}` : '',
+  ].filter(Boolean).join('\n');
+  try { await navigator.share({ text: lines, title: 'AUR Desk entry' }); }
+  catch (err) {
+    if (err && err.name === 'AbortError') return;
+    try { await navigator.clipboard.writeText(lines); toast('Summary copied. Paste it anywhere.'); }
+    catch { toast('Sharing is not available here'); }
+  }
 }
 
 /* =================== Money in / out form =================== */
@@ -405,16 +492,11 @@ export function renderTxnForm(ctx, view) {
 
   const del = view.querySelector('[data-delete]');
   if (del) del.onclick = async () => {
-    const ok = await confirmBox({
-      title: 'Delete this entry?',
-      text: `${existing.type === 'in' ? 'Money in' : 'Money out'}: ${money(existing.amount, existing.currency || 'INR')}${existing.invoiceNumber ? ` (for ${existing.invoiceNumber}, which will show this amount as unpaid again)` : ''}.`,
-      ok: 'Delete', danger: true,
-    });
-    if (!ok) return;
+    if (!(await confirmDeleteTxn(existing))) return;
     await db.del('txns', existing.id);
     await syncInvoice(existing.invoiceId);
     await ctx.reload(false);
-    toast('Deleted');
+    toast('Entry deleted');
     ctx.back();
   };
 }

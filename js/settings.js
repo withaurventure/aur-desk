@@ -79,7 +79,7 @@ export async function renderSettings(ctx, view) {
     </section>
 
     <button class="btn btn-ghost btn-block" data-update>Check for updates</button>
-    <p class="version">AUR Desk · step 8 · data stays on this phone</p>
+    <p class="version">AUR Desk · step 8.1 · data stays on this phone</p>
   `;
 
   view.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => ctx.go(b.dataset.go)));
